@@ -12,8 +12,9 @@
 struct sh_steam_input {
     void *controller; /* IClientControllerSerialized, or NULL */
     const struct sh_observer *o;
-    uint64_t next_poll_ms;
+    uint64_t next_poll_ms, next_sdl_ms;
     int32_t last_count;
+    bool sdl_started; /* SDL's gamepad subsystem started (or tried) */
     /* The per-game override and the PlayStation setting as found in stores 1
      * to 4, restored at the end where changed_override has their bit (two bits
      * per store: override, PlayStation setting). */

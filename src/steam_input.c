@@ -117,8 +117,42 @@ void sh_steam_input_start(struct sh_steam_input *s)
     s->next_poll_ms = s->o->now_ms() + SH_STEAM_INPUT_DELAY_MS;
 }
 
+/* The client builds its PlayStation (and other non-Steam) controllers from
+ * SDL's joysticks (CHIDDeviceListSDL, sdl://N devices). Desktop Steam starts
+ * SDL's joystick subsystem; in a headless client nothing does, so SDL never
+ * looks for pads (docs/STEAM_INPUT.md). Once the client has loaded SDL3.dll,
+ * Dock starts it with SDL's public SDL_InitSubSystem, the same call. Only a
+ * module lookup until then: no client call, nothing polled. */
+#define SH_SDL_INIT_GAMEPAD 0x00002000u
+typedef bool (__cdecl *sdl_init_fn)(uint32_t);
+typedef uint32_t *(__cdecl *sdl_joysticks_fn)(int *);
+typedef void (__cdecl *sdl_free_fn)(void *);
+
+static void start_sdl_gamepads(struct sh_steam_input *s)
+{
+    HMODULE sdl = GetModuleHandleW(L"SDL3.dll");
+    if (!sdl) return;
+    s->sdl_started = true;
+    sdl_init_fn init = (sdl_init_fn)(void *)GetProcAddress(sdl, "SDL_InitSubSystem");
+    sdl_joysticks_fn joysticks = (sdl_joysticks_fn)(void *)GetProcAddress(sdl, "SDL_GetJoysticks");
+    sdl_free_fn release = (sdl_free_fn)(void *)GetProcAddress(sdl, "SDL_free");
+    if (!init || !joysticks || !release) {
+        s->o->event("steam-input-sdl-init", -1);
+        return;
+    }
+    s->o->event("steam-input-sdl-init", init(SH_SDL_INIT_GAMEPAD) ? 1 : 0);
+    int count = 0;
+    uint32_t *ids = joysticks(&count);
+    if (ids) release(ids);
+    s->o->event("steam-input-sdl-joysticks", count);
+}
+
 void sh_steam_input_poll(struct sh_steam_input *s)
 {
+    if (s->controller && !s->sdl_started && s->o->now_ms() >= s->next_sdl_ms) {
+        s->next_sdl_ms = s->o->now_ms() + 500;
+        start_sdl_gamepads(s);
+    }
     if (!s->controller || s->last_count >= 0 || !s->next_poll_ms || s->o->now_ms() < s->next_poll_ms) return;
     int32_t count = ((connected_fn)CONTROLLER(s, 22))(s->controller);
     s->last_count = count < 0 ? 0 : count;
