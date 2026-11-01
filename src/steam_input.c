@@ -25,6 +25,7 @@ typedef bool (__thiscall *get_config_int_fn)(void *, uint32_t, const char *, int
 typedef bool (__thiscall *set_config_int_fn)(void *, uint32_t, const char *, int32_t);
 typedef void *(__thiscall *get_utils_fn)(void *, int32_t);
 typedef void (__thiscall *activate_fn)(void *, uint32_t, uint32_t, bool);
+typedef void (__thiscall *warm_fn)(void *, uint32_t, uint32_t);
 /* Valve's CUtlString: the callee reads only its first field, the text. */
 struct sh_utl_string { const char *text; uint64_t unused[2]; };
 typedef void (__thiscall *select_fn)(void *, uint32_t, const struct sh_utl_string *, uint64_t,
@@ -135,7 +136,8 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
         !dock_method_is(base, controller, 40, layout->controller_activate) ||
         !dock_method_is(base, controller, 114, layout->controller_select) ||
         !dock_method_is(base, controller, 38, layout->controller_load_vdf) ||
-        !dock_method_is(base, controller, 43, layout->controller_binding)) {
+        !dock_method_is(base, controller, 43, layout->controller_binding) ||
+        !dock_method_is(base, controller, 41, layout->controller_warm)) {
         o->event("steam-input-available", 0);
         return;
     }
@@ -250,6 +252,9 @@ static void report_focus(struct sh_steam_input *s)
      * its text to the client ("Warming Config Cache", then the client's "Add
      * to Config Cache Request ... adopting binding"); the activation uses that
      * cache. Without the UI nothing fills it, so Dock does. */
+    /* Desktop Steam's order, traced: WarmOptInStatus, load the layout,
+     * WarmOptInStatus again, ActivateConfig. */
+    ((warm_fn)CONTROLLER(s, 41))(s->controller, 0, (uint32_t)s->gameid);
     char *vdf = read_template();
     if (vdf) {
         struct sh_config_info info = {1, 0, -1, 0x140, -1, 0, 1};
@@ -268,6 +273,7 @@ void sh_steam_input_poll(struct sh_steam_input *s)
 {
     if (s->activate_at_ms && s->o->now_ms() >= s->activate_at_ms) {
         s->activate_at_ms = 0;
+        ((warm_fn)CONTROLLER(s, 41))(s->controller, 0, (uint32_t)s->gameid);
         ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
         s->o->event("steam-input-activated", 1);
     }

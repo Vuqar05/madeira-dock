@@ -60,6 +60,10 @@ struct dock_client_layout {
     /* Slot 43 CreateBindingInstanceFromVDFString(const source *): the binding
      * handle slot 38 adopts; the source's first field is the VDF text. */
     uintptr_t controller_binding;
+    /* Slot 41 WarmOptInStatus(controller, app): desktop Steam's UI calls it
+     * before loading and activating a game's layout (traced in a newer
+     * client, and SteamUI.dll's warm path). */
+    uintptr_t controller_warm;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);
