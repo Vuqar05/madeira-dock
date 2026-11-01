@@ -46,6 +46,9 @@ struct dock_client_layout {
      * 101 GetFocusedGameID. Steam Input activates a game's layout for the
      * focused game only (see CLIENT_LAYOUTS.md). */
     uintptr_t engine_utils, utils_set_focused, utils_get_focused;
+    /* IClientControllerSerializedMap slot 40 ActivateConfig(controller, app,
+     * bool): the controller manager's own activation of a game's layout. */
+    uintptr_t controller_activate;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);

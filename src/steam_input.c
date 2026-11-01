@@ -24,6 +24,7 @@ typedef void (__thiscall *reset_cache_fn)(void *);
 typedef bool (__thiscall *get_config_int_fn)(void *, uint32_t, const char *, int32_t *);
 typedef bool (__thiscall *set_config_int_fn)(void *, uint32_t, const char *, int32_t);
 typedef void *(__thiscall *get_utils_fn)(void *, int32_t);
+typedef void (__thiscall *activate_fn)(void *, uint32_t, uint32_t, bool);
 typedef bool (__thiscall *set_focused_fn)(void *, const uint64_t *, bool, bool, uint32_t, uint16_t, uint16_t);
 typedef uint64_t *(__thiscall *get_focused_fn)(void *, uint64_t *);
 
@@ -75,7 +76,8 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
     void *controller = ((get_controller_fn)(*(void ***)engine)[66])(engine, pipe);
     if (!controller || !dock_method_is(base, controller, 22, layout->controller_count) ||
         !dock_method_is(base, controller, 80, layout->controller_ps_changed) ||
-        !dock_method_is(base, controller, 131, layout->controller_reset_cache)) {
+        !dock_method_is(base, controller, 131, layout->controller_reset_cache) ||
+        !dock_method_is(base, controller, 40, layout->controller_activate)) {
         o->event("steam-input-available", 0);
         return;
     }
@@ -175,6 +177,11 @@ static void report_focus(struct sh_steam_input *s)
     uint64_t focused = 0;
     ((get_focused_fn)(*(void ***)s->utils)[101])(s->utils, &focused);
     s->o->event("steam-input-focused-app", (int32_t)(focused & 0xffffff));
+    /* Focus alone queued no activation on device: ask the controller manager
+     * to activate the game's layout for the first controller, as its own
+     * activation path does (CSteamController, "Queueing activation"). */
+    ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
+    s->o->event("steam-input-activated", 1);
 }
 
 void sh_steam_input_poll(struct sh_steam_input *s)
