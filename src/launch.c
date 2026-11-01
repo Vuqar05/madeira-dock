@@ -267,7 +267,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         !publish(&values[1], (DWORD)steamid) || !publish(&values[2], GetCurrentProcessId())) goto done;
     o->event("launch-client-discovery-published", 1);
     SetConsoleCtrlHandler(on_control, TRUE);
-    sh_steam_input_prepare(&steam_input, module, client_user, layout, o);
+    sh_steam_input_prepare(&steam_input, module, engine, pipe, client_user, layout, o);
     steam_input_prepared = true;
     uint64_t gameid = appid;
     uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, launch_option, 0, user_arguments);
@@ -275,7 +275,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
     if (!call) { result = 43; goto done; }
     sh_friends_init(&friends, module, engine, user, pipe, steamid, appid, layout, o);
     friends_started = true;
-    sh_steam_input_init(&steam_input, module, engine, pipe, layout, o);
+    sh_steam_input_start(&steam_input);
     uint64_t begin = o->now_ms(), stopped_at = 0;
     bool seen_running = false, result_received = false, result_rejected = false;
     /* ml1970: a content refusal keeps Valve's client alive while it installs

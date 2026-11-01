@@ -17,7 +17,7 @@ source = (Path(__file__).resolve().parents[1] / 'src/client_layout.c').read_text
 block = re.search(r'"' + fingerprint + r'",\s*(\d+),([^}]+)', source)
 assert block, 'Unknown SHA-256; never infer a layout from similar metadata'
 rvas = [int(x, 16) for x in re.findall(r'0x[0-9a-f]+', block[2])]
-assert len(rvas) == 38
+assert len(rvas) == 40
 pe = struct.unpack_from('<I', raw, 0x3c)[0]
 assert raw[pe:pe+4] == b'PE\0\0' and struct.unpack_from('<H', raw, pe+4)[0] == 0x8664
 sections = struct.unpack_from('<H', raw, pe+6)[0]
@@ -58,8 +58,8 @@ groups = [('CSteamClient',[8,33,43],rvas[:3]),
           ('CSteamClient',[69],rvas[31:32]),
           ('IClientSharedConnectionMap',[0,2],rvas[32:34]),
           ('CSteamClient',[66],rvas[34:35]),
-          ('IClientControllerSerializedMap',[22],rvas[35:36]),
-          ('IClientUserMap',[18,17],rvas[36:38])]
+          ('IClientControllerSerializedMap',[22,80,131],rvas[35:38]),
+          ('IClientUserMap',[18,17],rvas[38:40])]
 for name,slots,expected in groups:
     if not any(expected):
         print(f'SKIP: {name} {slots} not pinned for this build (feature unavailable)')
@@ -125,7 +125,8 @@ if any(rvas[34:36]):
     assert names_method(rvas[35], 'GetNumConnectedControllers', 0x9b1eac33), 'slot 22 is not GetNumConnectedControllers'
     assert b'\x48\x8b\x5c\x01\x60' in image[rvas[34]:rvas[34]+0x100], 'slot 66 does not return the 0x60 interface'
     print('PASS: CSteamClient slot 66 and IClientControllerSerializedMap slot 22 (GetNumConnectedControllers)')
-if any(rvas[36:38]):
-    for rva, name, function_id in ((rvas[36], 'GetConfigInt', 0xdbd03034), (rvas[37], 'SetConfigInt', 0x73d481e3)):
+if any(rvas[36:40]):
+    for rva, name, function_id in ((rvas[36], 'PS4SettingsChanged', 0x8c2bfeda), (rvas[37], 'ResetControllerEnableCache', 0x9e1dfe5c),
+                                   (rvas[38], 'GetConfigInt', 0xdbd03034), (rvas[39], 'SetConfigInt', 0x73d481e3)):
         assert names_method(rva, name, function_id), f'{hex(rva)} is not {name}'
-    print('PASS: IClientUserMap slots 18/17 (GetConfigInt, SetConfigInt)')
+    print('PASS: controller slots 80/131 and IClientUserMap slots 18/17 name their methods and IPC IDs')

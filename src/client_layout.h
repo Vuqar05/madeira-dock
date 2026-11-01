@@ -35,6 +35,9 @@ struct dock_client_layout {
      * slot 22 GetNumConnectedControllers. Zero where a build was not inspected:
      * the probe is then unavailable and the launch is unaffected. */
     uintptr_t engine_controller, controller_count;
+    /* IClientControllerSerializedMap slots 80 PS4SettingsChanged and 131
+     * ResetControllerEnableCache: what the settings page calls after a change. */
+    uintptr_t controller_ps_changed, controller_reset_cache;
     /* Steam Input's PlayStation opt-in: IClientUserMap slots 18 GetConfigInt and
      * 17 SetConfigInt (see CLIENT_LAYOUTS.md). */
     uintptr_t get_config_int, set_config_int;

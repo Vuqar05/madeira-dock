@@ -5,10 +5,9 @@
 #define MADEIRA_DOCK_STEAM_INPUT_H
 #include "session.h"
 
-/* Steam Input probe during a launched game: reports whether Valve's client
- * controller manager sees a controller. Optional: when unavailable (unpinned
- * client build, MADEIRA_DOCK_STEAM_INPUT=0 or unset, a method mismatch) it
- * reports steam-input-available=0 and does nothing else; the launch is never
+/* Steam Input during a launched game. Only with MADEIRA_DOCK_STEAM_INPUT=1.
+ * When unavailable (unpinned client build, a method mismatch) it reports
+ * steam-input-available=0 and does nothing else; the launch is never
  * affected. Reports numbers only. */
 struct sh_steam_input {
     void *controller; /* IClientControllerSerialized, or NULL */
@@ -21,15 +20,15 @@ struct sh_steam_input {
 };
 
 /* Before LaunchApp: Steam Input for PlayStation pads in every game ("2"), as
- * desktop Steam's setting does, so the client builds this launch's opt-in mask
- * with them. Only with MADEIRA_DOCK_STEAM_INPUT=1; the previous value comes back
- * in sh_steam_input_end. */
-void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *client_user,
-                            const struct dock_client_layout *layout, const struct sh_observer *o);
-void sh_steam_input_end(struct sh_steam_input *s);
-
-void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                         const struct dock_client_layout *layout, const struct sh_observer *o);
-/* Asks once, SH_STEAM_INPUT_DELAY_MS after init; call from the launch loop. */
+ * desktop Steam's setting does, then the client is told the setting changed,
+ * so this launch's opt-in includes them. The previous value comes back in
+ * sh_steam_input_end. */
+void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
+                            void *client_user, const struct dock_client_layout *layout,
+                            const struct sh_observer *o);
+/* After LaunchApp: the one question is asked SH_STEAM_INPUT_DELAY_MS later. */
+void sh_steam_input_start(struct sh_steam_input *s);
+/* Call from the launch loop. */
 void sh_steam_input_poll(struct sh_steam_input *s);
+void sh_steam_input_end(struct sh_steam_input *s);
 #endif
