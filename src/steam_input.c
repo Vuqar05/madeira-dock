@@ -35,7 +35,18 @@ static const wchar_t gamepad_template_file[] = L"\\controller_base\\templates\\c
 /* The 28-byte block the cache copies with each layout (CSteamController
  * slot 106 refuses NULL); desktop Steam's values are not known, zero here. */
 struct sh_config_info { uint8_t bytes[28]; };
-typedef uint32_t (__thiscall *binding_fn)(void *, const char *);
+/* What CreateBindingInstanceFromVDFString reads (CSteamController slot 113,
+ * parser 0x62dc30): +0x00 the VDF text, loaded as "controller_mappings";
+ * +0x18 a URL. Other fields are strings (NULL reads as ""), numbers and
+ * flags, zero here. */
+struct sh_binding_source {
+    const char *vdf;
+    const char *unknown08;
+    uint32_t unknown10;
+    const char *url;
+    uint8_t rest[0x40];
+};
+typedef uint32_t (__thiscall *binding_fn)(void *, const struct sh_binding_source *);
 typedef bool (__thiscall *load_vdf_fn)(void *, uint32_t, uint32_t, const char *, const void *, uint64_t,
                                        const struct sh_config_info *);
 
@@ -234,7 +245,8 @@ static void report_focus(struct sh_steam_input *s)
         struct sh_config_info info = {{0}};
         /* The cache adopts a binding made from the same text ("adopting
          * binding N"); with handle 0 it adopted none. */
-        uint32_t binding = ((binding_fn)CONTROLLER(s, 43))(s->controller, vdf);
+        struct sh_binding_source source = {vdf, NULL, 0, gamepad_template, {0}};
+        uint32_t binding = ((binding_fn)CONTROLLER(s, 43))(s->controller, &source);
         s->o->event("steam-input-binding", (int32_t)binding);
         bool loaded = ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, binding, &info);
         HeapFree(GetProcessHeap(), 0, vdf);
