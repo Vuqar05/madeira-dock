@@ -252,12 +252,19 @@ static void report_focus(struct sh_steam_input *s)
         HeapFree(GetProcessHeap(), 0, vdf);
         s->o->event("steam-input-layout-loaded", loaded ? 1 : 0);
     } else s->o->event("steam-input-layout-loaded", -1);
-    ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
-    s->o->event("steam-input-activated", 1);
+    /* The cache request runs as a client work item; activating at once used
+     * the old, empty mapping. Desktop Steam warms well before the game window
+     * shows; Dock activates a few seconds after the load. */
+    s->activate_at_ms = s->o->now_ms() + 3000;
 }
 
 void sh_steam_input_poll(struct sh_steam_input *s)
 {
+    if (s->activate_at_ms && s->o->now_ms() >= s->activate_at_ms) {
+        s->activate_at_ms = 0;
+        ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
+        s->o->event("steam-input-activated", 1);
+    }
     if (s->utils && s->next_poll_ms && s->o->now_ms() >= s->next_focus_ms) {
         s->next_focus_ms = s->o->now_ms() + 1000;
         report_focus(s);

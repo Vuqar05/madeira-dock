@@ -18,7 +18,7 @@ struct sh_steam_input {
     /* IClientUtils, or NULL: the focused game, as desktop Steam's UI reports
      * it. focus_pid is the game process last reported. */
     void *utils;
-    uint64_t gameid, next_focus_ms;
+    uint64_t gameid, next_focus_ms, activate_at_ms;
     DWORD focus_pid;
     /* The per-game override and the PlayStation setting as found in stores 1
      * to 4, restored at the end where changed_override has their bit (two bits
