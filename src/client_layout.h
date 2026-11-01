@@ -30,6 +30,11 @@ struct dock_client_layout {
         friend_game, friend_presence, friend_invite, friend_join_lobby, friend_join_presence,
         persona_state, set_persona_state, request_user_info,
         engine_shared, shared_allocate, shared_send;
+    /* Steam Input (see CLIENT_LAYOUTS.md): CSteamClient slot 66
+     * GetIClientControllerSerialized(pipe), then IClientControllerSerializedMap
+     * slot 22 GetNumConnectedControllers. Zero where a build was not inspected:
+     * the probe is then unavailable and the launch is unaffected. */
+    uintptr_t engine_controller, controller_count;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);

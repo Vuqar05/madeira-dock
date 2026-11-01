@@ -228,3 +228,28 @@ status sender `0x590850` needs logon state 4 and drops an unchanged status
 
 Service calls use EMsg 151 with header field 12 target_job_name; Dock sends
 `Chat.RequestFriendPersonaStates#1` this way (no response is read).
+
+## Steam Input research
+
+January build only (September not inspected, so unpinned: the probe reports
+`steam-input-available=0`). Static PE/RTTI and disassembly only.
+
+- `IClientControllerSerialized` is pipe-level: the pipe constructor (RVA
+  `0x942a0b`) creates `IClientControllerSerializedMap` (vtable RVA `0x12c9fd0`)
+  with user 0 and stores it at pipe entry `+0x60`. The neighbouring entries
+  check the layout: `+0x38` to `+0x50` are the System, SystemDock, SystemAudio
+  and SystemDisplay manager maps (CSteamClient slots 38 to 41), `+0x58` is
+  `IClientVRMap` (slot 61).
+- CSteamClient slot 66, RVA `0x943380`: `GetIClientControllerSerialized`
+  (rcx this, edx HSteamPipe), returning `movq 0x60(%rcx,%rax)` of the
+  pipe's entry.
+- IClientControllerSerializedMap slot 22, RVA `0x765790`:
+  `GetNumConnectedControllers` (rcx this only, int32 result). The wrapper
+  names itself through a RIP-relative LEA and serializes IPC function ID
+  `0x9b1eac33`, fencepost `0xa02721fd`.
+
+All 149 slots name their methods the same way, so later steps can pin
+`GetControllerEnableSupport` (132), `SetControllerSetting` (113),
+`GetConfigForAppAndController` (124) and others. `tools/check-client-layout.py`
+verifies slot 66's `+0x60` load and slot 22's name and function ID.
+`src/steam_input.c` runs only with `MADEIRA_DOCK_STEAM_INPUT=1`.

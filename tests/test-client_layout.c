@@ -38,9 +38,15 @@ int main(void)
     vtable[13] = (void *)(base + jan->engine_friends);
     assert(dock_method_is(base, &object, 13, jan->engine_friends));
     assert(!dock_method_is(base, &object, 13, sep->engine_friends));
+    /* Steam Input: pinned for January only. */
+    assert(jan->engine_controller == 0x943380 && jan->controller_count == 0x765790);
+    assert(!sep->engine_controller && !sep->controller_count);
+    vtable[66] = (void *)(base + jan->engine_controller);
+    assert(dock_method_is(base, &object, 66, jan->engine_controller));
+    assert(!dock_method_is(base, &object, 65, jan->engine_controller));
     assert(!dock_method_is(base + 1, &object, 8, jan->engine_user));
     assert(!dock_method_is(base, NULL, 8, jan->engine_user));
     object = NULL;
     assert(!dock_method_is(base, &object, 8, jan->engine_user));
-    puts("PASS: exact client selection, unknown/partial/changed hash rejection and mismatched method rejection; friends pinned for January only");
+    puts("PASS: exact client selection, unknown/partial/changed hash rejection and mismatched method rejection; friends and Steam Input pinned for January only");
 }
