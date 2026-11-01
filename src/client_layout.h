@@ -53,6 +53,10 @@ struct dock_client_layout {
      * uint64 workshop, const CUtlString *url, bool, bool): the layout the
      * controller manager activates for an app (see CLIENT_LAYOUTS.md). */
     uintptr_t controller_select;
+    /* Slot 38 LoadConfigFromVDFString(controller, app, const char *vdf,
+     * const void *optional, uint64, const void *info): how desktop Steam's UI
+     * (SteamUI.dll) hands the client a layout's text for its config cache. */
+    uintptr_t controller_load_vdf;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);

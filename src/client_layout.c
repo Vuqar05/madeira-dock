@@ -16,7 +16,7 @@ static const struct dock_client_layout layouts[] = {
         0x77e460, 0x73cbb0, 0x8415d0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0
+        0, 0, 0, 0, 0, 0
     },
     {
         "71b391fe9f3e2006cbc81a5c75eef3eb4186012deabfdb2c8b7e8d4850ecf640", 202601,
@@ -30,7 +30,7 @@ static const struct dock_client_layout layouts[] = {
         0x768a20, 0x848460, 0x82e020,
         0x9447d0, 0x70a0b0, 0x832cb0,
         0x943380, 0x765790, 0x821920, 0x82f010, 0x748980, 0x83a4e0,
-        0x945220, 0x83ed90, 0x751780, 0x704ce0, 0x84c100
+        0x945220, 0x83ed90, 0x751780, 0x704ce0, 0x84c100, 0x81caa0
     }
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256)

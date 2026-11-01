@@ -31,6 +31,33 @@ typedef void (__thiscall *select_fn)(void *, uint32_t, const struct sh_utl_strin
                                      const struct sh_utl_string *, bool, bool);
 /* Steam's own PS5 "Gamepad" template (controller_base/templates). */
 static const char gamepad_template[] = "template://controller_ps5_gamepad_joystick.vdf";
+static const wchar_t gamepad_template_file[] = L"\\controller_base\\templates\\controller_ps5_gamepad_joystick.vdf";
+/* The 28-byte block the cache copies with each layout (CSteamController
+ * slot 106 refuses NULL); desktop Steam's values are not known, zero here. */
+struct sh_config_info { uint8_t bytes[28]; };
+typedef bool (__thiscall *load_vdf_fn)(void *, uint32_t, uint32_t, const char *, const void *, uint64_t,
+                                       const struct sh_config_info *);
+
+/* The template's text, read from Steam's folder (MADEIRA_STEAM_HOST_CLIENT_DIR),
+ * or NULL. The caller frees it with HeapFree. */
+static char *read_template(void)
+{
+    wchar_t path[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_CLIENT_DIR", path, MAX_PATH);
+    if (!n || n + wcslen(gamepad_template_file) >= MAX_PATH) return NULL;
+    wcscat(path, gamepad_template_file);
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return NULL;
+    DWORD size = GetFileSize(file, NULL), got = 0;
+    char *text = size && size < (1u << 20) ? HeapAlloc(GetProcessHeap(), 0, size + 1) : NULL;
+    if (text && (!ReadFile(file, text, size, &got, NULL) || got != size)) {
+        HeapFree(GetProcessHeap(), 0, text);
+        text = NULL;
+    }
+    CloseHandle(file);
+    if (text) text[size] = 0;
+    return text;
+}
 typedef bool (__thiscall *set_focused_fn)(void *, const uint64_t *, bool, bool, uint32_t, uint16_t, uint16_t);
 typedef uint64_t *(__thiscall *get_focused_fn)(void *, uint64_t *);
 
@@ -84,7 +111,8 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
         !dock_method_is(base, controller, 80, layout->controller_ps_changed) ||
         !dock_method_is(base, controller, 131, layout->controller_reset_cache) ||
         !dock_method_is(base, controller, 40, layout->controller_activate) ||
-        !dock_method_is(base, controller, 114, layout->controller_select)) {
+        !dock_method_is(base, controller, 114, layout->controller_select) ||
+        !dock_method_is(base, controller, 38, layout->controller_load_vdf)) {
         o->event("steam-input-available", 0);
         return;
     }
@@ -195,6 +223,17 @@ static void report_focus(struct sh_steam_input *s)
     struct sh_utl_string app_key = {app, {0, 0}}, url = {gamepad_template, {0, 0}};
     ((select_fn)CONTROLLER(s, 114))(s->controller, 0, &app_key, 0, &url, false, true);
     s->o->event("steam-input-selected", 1);
+    /* Selecting is not enough: desktop Steam's UI reads the layout and hands
+     * its text to the client ("Warming Config Cache", then the client's "Add
+     * to Config Cache Request ... adopting binding"); the activation uses that
+     * cache. Without the UI nothing fills it, so Dock does. */
+    char *vdf = read_template();
+    if (vdf) {
+        struct sh_config_info info = {{0}};
+        bool loaded = ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, 0, &info);
+        HeapFree(GetProcessHeap(), 0, vdf);
+        s->o->event("steam-input-layout-loaded", loaded ? 1 : 0);
+    } else s->o->event("steam-input-layout-loaded", -1);
     ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
     s->o->event("steam-input-activated", 1);
 }
