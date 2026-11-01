@@ -25,6 +25,12 @@ typedef bool (__thiscall *get_config_int_fn)(void *, uint32_t, const char *, int
 typedef bool (__thiscall *set_config_int_fn)(void *, uint32_t, const char *, int32_t);
 typedef void *(__thiscall *get_utils_fn)(void *, int32_t);
 typedef void (__thiscall *activate_fn)(void *, uint32_t, uint32_t, bool);
+/* Valve's CUtlString: the callee reads only its first field, the text. */
+struct sh_utl_string { const char *text; uint64_t unused[2]; };
+typedef void (__thiscall *select_fn)(void *, uint32_t, const struct sh_utl_string *, uint64_t,
+                                     const struct sh_utl_string *, bool, bool);
+/* Steam's own PS5 "Gamepad" template (controller_base/templates). */
+static const char gamepad_template[] = "template://controller_ps5_gamepad_joystick.vdf";
 typedef bool (__thiscall *set_focused_fn)(void *, const uint64_t *, bool, bool, uint32_t, uint16_t, uint16_t);
 typedef uint64_t *(__thiscall *get_focused_fn)(void *, uint64_t *);
 
@@ -77,7 +83,8 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
     if (!controller || !dock_method_is(base, controller, 22, layout->controller_count) ||
         !dock_method_is(base, controller, 80, layout->controller_ps_changed) ||
         !dock_method_is(base, controller, 131, layout->controller_reset_cache) ||
-        !dock_method_is(base, controller, 40, layout->controller_activate)) {
+        !dock_method_is(base, controller, 40, layout->controller_activate) ||
+        !dock_method_is(base, controller, 114, layout->controller_select)) {
         o->event("steam-input-available", 0);
         return;
     }
@@ -180,6 +187,14 @@ static void report_focus(struct sh_steam_input *s)
     /* Focus alone queued no activation on device: ask the controller manager
      * to activate the game's layout for the first controller, as its own
      * activation path does (CSteamController, "Queueing activation"). */
+    /* No layout is selected for the game in a headless client: desktop
+     * Steam's UI selects one (SetActiveConfigForApp in its controller
+     * settings). Select Steam's PS5 Gamepad template, as the UI does. */
+    char app[16];
+    snprintf(app, sizeof app, "%u", (uint32_t)s->gameid);
+    struct sh_utl_string app_key = {app, {0, 0}}, url = {gamepad_template, {0, 0}};
+    ((select_fn)CONTROLLER(s, 114))(s->controller, 0, &app_key, 0, &url, false, true);
+    s->o->event("steam-input-selected", 1);
     ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
     s->o->event("steam-input-activated", 1);
 }

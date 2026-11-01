@@ -49,6 +49,10 @@ struct dock_client_layout {
     /* IClientControllerSerializedMap slot 40 ActivateConfig(controller, app,
      * bool): the controller manager's own activation of a game's layout. */
     uintptr_t controller_activate;
+    /* Slot 114 SetSelectedConfigForApp(controller, const CUtlString *app,
+     * uint64 workshop, const CUtlString *url, bool, bool): the layout the
+     * controller manager activates for an app (see CLIENT_LAYOUTS.md). */
+    uintptr_t controller_select;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);

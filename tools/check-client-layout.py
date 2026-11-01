@@ -17,7 +17,7 @@ source = (Path(__file__).resolve().parents[1] / 'src/client_layout.c').read_text
 block = re.search(r'"' + fingerprint + r'",\s*(\d+),([^}]+)', source)
 assert block, 'Unknown SHA-256; never infer a layout from similar metadata'
 rvas = [int(x, 16) for x in re.findall(r'0x[0-9a-f]+', block[2])]
-assert len(rvas) == 44
+assert len(rvas) == 45
 pe = struct.unpack_from('<I', raw, 0x3c)[0]
 assert raw[pe:pe+4] == b'PE\0\0' and struct.unpack_from('<H', raw, pe+4)[0] == 0x8664
 sections = struct.unpack_from('<H', raw, pe+6)[0]
@@ -62,7 +62,7 @@ groups = [('CSteamClient',[8,33,43],rvas[:3]),
           ('IClientUserMap',[18,17],rvas[38:40]),
           ('CSteamClient',[14],rvas[40:41]),
           ('IClientUtilsMap',[48,101],rvas[41:43]),
-          ('IClientControllerSerializedMap',[40],rvas[43:44])]
+          ('IClientControllerSerializedMap',[40,114],rvas[43:45])]
 for name,slots,expected in groups:
     if not any(expected):
         print(f'SKIP: {name} {slots} not pinned for this build (feature unavailable)')
@@ -145,3 +145,6 @@ if any(rvas[40:43]):
 if any(rvas[43:44]):
     assert names_method(rvas[43], 'ActivateConfig', 0xe4de7517), 'slot 40 is not ActivateConfig'
     print('PASS: IClientControllerSerializedMap slot 40 (ActivateConfig)')
+if any(rvas[44:45]):
+    assert names_method(rvas[44], 'SetSelectedConfigForApp', 0x4a9c52b6), 'slot 114 is not SetSelectedConfigForApp'
+    print('PASS: IClientControllerSerializedMap slot 114 (SetSelectedConfigForApp)')
