@@ -18,3 +18,7 @@ for test in probe validation auth client_layout friends_format; do
         -Isrc "src/$test.c" "tests/test-$test.c" -o "$output/test-$test"
     "$output/test-$test"
 done
+
+"$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -Isrc src/client_layout.c tests/test-steam_input.c -o "$output/test-steam_input"
+"$output/test-steam_input"

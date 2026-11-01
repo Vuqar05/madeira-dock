@@ -31,8 +31,7 @@ struct sh_utl_string { const char *text; uint64_t unused[2]; };
 typedef void (__thiscall *select_fn)(void *, uint32_t, const struct sh_utl_string *, uint64_t,
                                      const struct sh_utl_string *, bool, bool);
 /* Steam's own PS5 "Gamepad" template (controller_base/templates). */
-static const char gamepad_template[] = "template://controller_ps5_gamepad_joystick.vdf";
-static const wchar_t gamepad_template_file[] = L"\\controller_base\\templates\\controller_ps5_gamepad_joystick.vdf";
+static const char gamepad_template[] = "controller_ps5_gamepad_joystick.vdf";
 /* The 28-byte block the cache copies with each layout (CSteamController
  * slot 106 refuses NULL). SteamUI.dll passes these defaults, the same the
  * client gives a new cache entry; zeros made the layout unusable. */
@@ -46,29 +45,65 @@ struct sh_config_info {
     int32_t kind18; /* 1; 4 for Steam's own desktop layout (app 769) */
 };
 _Static_assert(sizeof(struct sh_config_info) == 28, "SteamUI's info block is 28 bytes");
-/* What CreateBindingInstanceFromVDFString reads (CSteamController slot 113,
- * parser 0x62dc30): +0x00 the VDF text, loaded as "controller_mappings";
- * +0x18 a URL. Other fields are strings (NULL reads as ""), numbers and
- * flags, zero here. */
-struct sh_binding_source {
-    const char *vdf;
-    const char *unknown08;
-    uint32_t unknown10;
-    const char *url;
-    uint8_t rest[0x40];
-};
-typedef uint32_t (__thiscall *binding_fn)(void *, const struct sh_binding_source *);
-typedef bool (__thiscall *load_vdf_fn)(void *, uint32_t, uint32_t, const char *, const void *, uint64_t,
+typedef void (__thiscall *load_vdf_fn)(void *, uint32_t, uint32_t, const char *, const void *, uint64_t,
                                        const struct sh_config_info *);
 
 /* The template's text, read from Steam's folder (MADEIRA_STEAM_HOST_CLIENT_DIR),
  * or NULL. The caller frees it with HeapFree. */
-static char *read_template(void)
+static bool basename_is_safe(const char *name)
 {
-    wchar_t path[MAX_PATH];
-    DWORD n = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_CLIENT_DIR", path, MAX_PATH);
-    if (!n || n + wcslen(gamepad_template_file) >= MAX_PATH) return NULL;
-    wcscat(path, gamepad_template_file);
+    return name && *name && !strstr(name, "..") && !strpbrk(name, "\\/:");
+}
+
+/* GetConfigForAppAndController returns a selection key, not a URL. SteamUI's
+ * resolver (January SteamUI.dll 0x544440) adds template:// to a bare name and
+ * resolves AC-app-device to the account's local autosave. Accept the old
+ * template:// spelling too, because earlier Dock builds saved that spelling. */
+static char *read_layout(const struct sh_steam_input *s, const char *selection)
+{
+    wchar_t root[MAX_PATH], path[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_CLIENT_DIR", root, MAX_PATH);
+    if (!n || n >= MAX_PATH) return NULL;
+    while (n > 3 && (root[n - 1] == L'\\' || root[n - 1] == L'/')) root[--n] = 0;
+    const char *name = selection;
+    if (!name || !*name) name = gamepad_template;
+    if (!strncmp(name, "template://", 11)) name += 11;
+    if (!strncmp(name, "AC-", 3)) {
+        char app[16];
+        snprintf(app, sizeof app, "%u", (uint32_t)s->gameid);
+        size_t app_len = strlen(app);
+        if (strncmp(name + 3, app, app_len) || name[3 + app_len] != '-') return NULL;
+        const char *device = name + 4 + app_len;
+        if (!basename_is_safe(device) || strchr(device, '-')) return NULL;
+        wchar_t device_name[MAX_PATH], relative[MAX_PATH];
+        if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, device, -1, device_name, MAX_PATH)) return NULL;
+        int len = swprintf(relative, MAX_PATH,
+                           L"\\steamapps\\common\\Steam Controller Configs\\%u\\config\\%u\\%ls.vdf",
+                           s->account_id, (uint32_t)s->gameid, device_name);
+        if (len < 0 || n + (size_t)len >= MAX_PATH) return NULL;
+        wcscpy(path, root); wcscat(path, relative);
+    } else if (basename_is_safe(name)) {
+        /* A Workshop ID is returned separately. Other selection keys need
+         * their own resolver and must never be mistaken for a template. */
+        size_t len = strlen(name);
+        if (len < 5 || strcmp(name + len - 4, ".vdf")) return NULL;
+        wchar_t basename[MAX_PATH];
+        if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, basename, MAX_PATH)) return NULL;
+        const wchar_t folder[] = L"\\controller_base\\templates\\";
+        if (n + wcslen(folder) + wcslen(basename) >= MAX_PATH) return NULL;
+        wcscpy(path, root); wcscat(path, folder); wcscat(path, basename);
+    } else {
+        /* Also accept a resolved file beneath Steam's directory. */
+        wchar_t relative[MAX_PATH];
+        if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, relative, MAX_PATH)) return NULL;
+        for (wchar_t *p = relative; *p; ++p) if (*p == L'/') *p = L'\\';
+        if (!wcsncmp(relative, L"controller_base\\", 16)) {
+            if (n + 1 + wcslen(relative) >= MAX_PATH) return NULL;
+            wcscpy(path, root); wcscat(path, L"\\"); wcscat(path, relative);
+        } else wcscpy(path, relative);
+        if (_wcsnicmp(path, root, n) || path[n] != L'\\' || wcsstr(path + n, L"..") ||
+            wcschr(path + n, L':')) return NULL;
+    }
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (file == INVALID_HANDLE_VALUE) return NULL;
     DWORD size = GetFileSize(file, NULL), got = 0;
@@ -81,7 +116,7 @@ static char *read_template(void)
     if (text) text[size] = 0;
     return text;
 }
-typedef bool (__thiscall *set_focused_fn)(void *, const uint64_t *, bool, bool, uint32_t, uint16_t, uint16_t);
+typedef void (__thiscall *set_focused_fn)(void *, const uint64_t *, bool, bool, uint32_t, uint16_t, uint16_t);
 typedef uint64_t *(__thiscall *get_focused_fn)(void *, uint64_t *);
 
 /* The client reads two keys when it builds a game's opt-in mask: the per-game
@@ -117,12 +152,13 @@ static void settings_changed(struct sh_steam_input *s)
 }
 
 void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                            void *client_user, uint32_t appid, const struct dock_client_layout *layout,
+                            void *client_user, uint64_t steamid, uint32_t appid, const struct dock_client_layout *layout,
                             const struct sh_observer *o)
 {
     memset(s, 0, sizeof *s);
     s->o = o;
     s->last_count = -1;
+    s->output_reserved = s->output_connected = -1;
     if (!enabled()) return;
     uintptr_t base = (uintptr_t)module;
     if (!layout || !dock_method_is(base, engine, 66, layout->engine_controller)) {
@@ -136,7 +172,9 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
         !dock_method_is(base, controller, 40, layout->controller_activate) ||
         !dock_method_is(base, controller, 114, layout->controller_select) ||
         !dock_method_is(base, controller, 38, layout->controller_load_vdf) ||
-        !dock_method_is(base, controller, 43, layout->controller_binding) ||
+        !dock_method_is(base, controller, 85, layout->controller_connected) ||
+        !dock_method_is(base, controller, 124, layout->controller_get_config) ||
+        !dock_method_is(base, controller, 128, layout->controller_has_mapping) ||
         !dock_method_is(base, controller, 41, layout->controller_warm)) {
         o->event("steam-input-available", 0);
         return;
@@ -144,6 +182,7 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
     s->controller = controller;
     o->event("steam-input-available", 1);
     s->gameid = appid; /* CGameID of a Steam app: the app ID, type 0 */
+    s->account_id = (uint32_t)steamid; /* local autosave directory; never reported */
     if (dock_method_is(base, engine, 14, layout->engine_utils)) {
         void *utils = ((get_utils_fn)(*(void ***)engine)[14])(engine, pipe);
         if (utils && dock_method_is(base, utils, 48, layout->utils_set_focused) &&
@@ -203,7 +242,7 @@ static void start_sdl_gamepads(struct sh_steam_input *s)
 {
     HMODULE sdl = GetModuleHandleW(L"SDL3.dll");
     if (!sdl) return;
-    s->sdl_started = true;
+    ++s->sdl_attempts;
     sdl_init_fn init = (sdl_init_fn)(void *)GetProcAddress(sdl, "SDL_InitSubSystem");
     sdl_joysticks_fn joysticks = (sdl_joysticks_fn)(void *)GetProcAddress(sdl, "SDL_GetJoysticks");
     sdl_free_fn release = (sdl_free_fn)(void *)GetProcAddress(sdl, "SDL_free");
@@ -211,7 +250,9 @@ static void start_sdl_gamepads(struct sh_steam_input *s)
         s->o->event("steam-input-sdl-init", -1);
         return;
     }
-    s->o->event("steam-input-sdl-init", init(SH_SDL_INIT_GAMEPAD) ? 1 : 0);
+    s->sdl_started = init(SH_SDL_INIT_GAMEPAD);
+    s->o->event("steam-input-sdl-init", s->sdl_started ? 1 : 0);
+    if (!s->sdl_started) return;
     int count = 0;
     uint32_t *ids = joysticks(&count);
     if (ids) release(ids);
@@ -232,67 +273,150 @@ static void report_focus(struct sh_steam_input *s)
     if (!pid || pid == GetCurrentProcessId() || pid == s->focus_pid) return;
     s->focus_pid = pid;
     s->o->event("steam-input-focus-pid", (int32_t)pid);
-    bool done = ((set_focused_fn)(*(void ***)s->utils)[48])(s->utils, &s->gameid, true, false, pid, 0, 0);
-    s->o->event("steam-input-focus-set", done ? 1 : 0);
+    ((set_focused_fn)(*(void ***)s->utils)[48])(s->utils, &s->gameid, true, false, pid, 0, 0);
+    s->o->event("steam-input-focus-reported", 1);
     uint64_t focused = 0;
     ((get_focused_fn)(*(void ***)s->utils)[101])(s->utils, &focused);
     s->o->event("steam-input-focused-app", (int32_t)(focused & 0xffffff));
-    /* Focus alone queued no activation on device: ask the controller manager
-     * to activate the game's layout for the first controller, as its own
-     * activation path does (CSteamController, "Queueing activation"). */
-    /* No layout is selected for the game in a headless client: desktop
-     * Steam's UI selects one (SetActiveConfigForApp in its controller
-     * settings). Select Steam's PS5 Gamepad template, as the UI does. */
+    if (s->layout_queued && !s->activate_at_ms) s->activate_at_ms = s->o->now_ms() + 250;
+}
+
+typedef bool (__thiscall *is_connected_fn)(void *, uint32_t, bool);
+typedef bool (__thiscall *has_mapping_fn)(void *, uint32_t);
+typedef bool (__thiscall *get_config_fn)(void *, uint32_t, const char *, uint64_t *, void *);
+
+/* Observe only; never create or write Steam's stream. January's
+ * CXInputSteamMemStream (0xa48340) maps 0x3e78 bytes with masks at 0/4
+ * (reserved/connected) and XINPUT_STATE[16] at 0x934. The packet counter is
+ * excluded from the change check. This separates a loaded binding from
+ * actual output and reports no button/axis values. */
+static void observe_output(struct sh_steam_input *s)
+{
+    if (!s->output_view) {
+        s->output_map = OpenFileMappingW(FILE_MAP_READ, false, L"SteamXInput_mem-IPCWrapper");
+        if (!s->output_map) return;
+        s->output_view = MapViewOfFile(s->output_map, FILE_MAP_READ, 0, 0, 0x3e78);
+        if (!s->output_view) { CloseHandle(s->output_map); s->output_map = NULL; return; }
+        s->o->event("steam-input-output-stream", 1);
+    }
+    uint32_t reserved, connected;
+    memcpy(&reserved, s->output_view, sizeof reserved);
+    memcpy(&connected, s->output_view + 4, sizeof connected);
+    if ((int32_t)reserved != s->output_reserved) {
+        s->output_reserved = (int32_t)reserved;
+        s->o->event("steam-input-output-reserved", (int32_t)reserved);
+    }
+    if ((int32_t)connected != s->output_connected) {
+        s->output_connected = (int32_t)connected;
+        s->o->event("steam-input-output-connected", (int32_t)connected);
+    }
+    if ((connected & 1) && !s->output_changed) {
+        uint8_t state[12];
+        memcpy(state, s->output_view + 0x938, sizeof state);
+        if (memcmp(s->output_state, state, sizeof state)) {
+            s->output_changed = true;
+            s->o->event("steam-input-output-changed", 1);
+        }
+    }
+}
+
+/* Layout setup is independent of focus changes. SDL may find the pad after
+ * the game window already exists, and a pad can reconnect with the same PID.
+ * Query the cheap indexed status, not GetNumConnectedControllers (on device
+ * that enumeration interrupted audio). Requeue only on connection or failure. */
+static void load_layout(struct sh_steam_input *s)
+{
     char app[16];
     snprintf(app, sizeof app, "%u", (uint32_t)s->gameid);
-    struct sh_utl_string app_key = {app, {0, 0}}, url = {gamepad_template, {0, 0}};
-    ((select_fn)CONTROLLER(s, 114))(s->controller, 0, &app_key, 0, &url, false, true);
-    s->o->event("steam-input-selected", 1);
-    /* Selecting is not enough: desktop Steam's UI reads the layout and hands
-     * its text to the client ("Warming Config Cache", then the client's "Add
-     * to Config Cache Request ... adopting binding"); the activation uses that
-     * cache. Without the UI nothing fills it, so Dock does. */
-    /* Desktop Steam's order, traced: WarmOptInStatus, load the layout,
-     * WarmOptInStatus again, ActivateConfig. */
-    ((warm_fn)CONTROLLER(s, 41))(s->controller, 0, (uint32_t)s->gameid);
-    char *vdf = read_template();
-    if (vdf) {
-        struct sh_config_info info = {1, 0, -1, 0x140, -1, 0, 1};
-        /* As SteamUI.dll's call: no optional block, 0 for the uint64. */
-        bool loaded = ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, 0, &info);
-        HeapFree(GetProcessHeap(), 0, vdf);
-        s->o->event("steam-input-layout-loaded", loaded ? 1 : 0);
-    } else s->o->event("steam-input-layout-loaded", -1);
-    /* The cache request runs as a client work item; activating at once used
-     * the old, empty mapping. Desktop Steam warms well before the game window
-     * shows; Dock activates a few seconds after the load. */
+    s->selected_workshop = 0;
+    bool selected = ((get_config_fn)CONTROLLER(s, 124))(s->controller, 0, app,
+                                                       &s->selected_workshop, &s->selected_url);
+    /* Refresh the client's per-account selection before loading, as SteamUI
+     * does. It also refreshes the controller metadata used by the loader. */
+    const char *url = selected ? s->selected_url.text : NULL;
+    s->o->event("steam-input-layout-source", !url || !*url ? 0 :
+               !strncmp(url, "template://", 11) ? 1 :
+               strlen(url) > 2 && url[1] == ':' ? 2 :
+               !strncmp(url, "controller_base", 15) ? 3 :
+               !strncmp(url, "AC-", 3) ? 6 : basename_is_safe(url) ? 5 : 4);
+    char *vdf = s->selected_workshop ? NULL : read_layout(s, url);
+    if (!vdf) {
+        s->o->event("steam-input-layout-unavailable", 1);
+        ++s->layout_attempts;
+        return;
+    }
+    if (!selected || !s->selected_url.text || !*s->selected_url.text) {
+        struct sh_utl_string app_key = {app, {0, 0}}, url = {gamepad_template, {0, 0}};
+        ((select_fn)CONTROLLER(s, 114))(s->controller, 0, &app_key, 0, &url, false, true);
+        s->o->event("steam-input-selected", 1);
+    }
+    struct sh_config_info info = {1, 0, -1, 0x140, -1, 0, 1};
+    ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, 0, &info);
+    HeapFree(GetProcessHeap(), 0, vdf);
+    s->cache_waits = 0;
+    s->layout_queued = true;
     s->activate_at_ms = s->o->now_ms() + 3000;
+    s->o->event("steam-input-layout-queued", 1); /* void API; not proof of adoption */
 }
 
 void sh_steam_input_poll(struct sh_steam_input *s)
 {
-    if (s->activate_at_ms && s->o->now_ms() >= s->activate_at_ms) {
-        s->activate_at_ms = 0;
-        ((warm_fn)CONTROLLER(s, 41))(s->controller, 0, (uint32_t)s->gameid);
-        ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
-        s->o->event("steam-input-activated", 1);
+    if (!s->controller || !s->next_poll_ms) return;
+    uint64_t now = s->o->now_ms();
+    if (now >= s->next_output_ms) {
+        s->next_output_ms = now + 100;
+        observe_output(s);
     }
-    if (s->utils && s->next_poll_ms && s->o->now_ms() >= s->next_focus_ms) {
-        s->next_focus_ms = s->o->now_ms() + 1000;
-        report_focus(s);
-    }
-    if (s->controller && !s->sdl_started && s->o->now_ms() >= s->next_sdl_ms) {
-        s->next_sdl_ms = s->o->now_ms() + 500;
+    if (!s->sdl_started && s->sdl_attempts < 3 && now >= s->next_sdl_ms) {
+        s->next_sdl_ms = now + 1000;
         start_sdl_gamepads(s);
     }
-    if (!s->controller || s->last_count >= 0 || !s->next_poll_ms || s->o->now_ms() < s->next_poll_ms) return;
-    int32_t count = ((connected_fn)CONTROLLER(s, 22))(s->controller);
-    s->last_count = count < 0 ? 0 : count;
-    s->o->event("steam-input-controllers", count);
+    if (s->utils && now >= s->next_focus_ms) {
+        s->next_focus_ms = now + 1000;
+        report_focus(s);
+    }
+    if (s->sdl_started && now >= s->next_controller_ms) {
+        s->next_controller_ms = now + 5000;
+        bool connected = ((is_connected_fn)CONTROLLER(s, 85))(s->controller, 0, false);
+        if (!connected) {
+            s->pad_connected = false;
+            s->layout_queued = false;
+            s->layout_attempts = 0;
+            s->activate_at_ms = 0;
+        } else {
+            if (!s->pad_connected) s->o->event("steam-input-connected", 1);
+            s->pad_connected = true;
+            if (!s->layout_queued && s->layout_attempts < 3) load_layout(s);
+        }
+    }
+    if (s->activate_at_ms && now >= s->activate_at_ms) {
+        s->activate_at_ms = 0;
+        bool cached = ((has_mapping_fn)CONTROLLER(s, 128))(s->controller, (uint32_t)s->gameid);
+        s->o->event("steam-input-mapping-cached", cached ? 1 : 0);
+        if (!cached) {
+            if (++s->cache_waits < 5) s->activate_at_ms = now + 1000;
+            else { s->layout_queued = false; ++s->layout_attempts; }
+        } else {
+            /* Recompute the enable decision after the async cache load, not
+             * just before it. Never activate the previous empty mapping. */
+            ((reset_cache_fn)CONTROLLER(s, 131))(s->controller);
+            ((warm_fn)CONTROLLER(s, 41))(s->controller, 0, (uint32_t)s->gameid);
+            ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
+            s->o->event("steam-input-activation-requested", 1);
+        }
+    }
+    if (s->last_count < 0 && now >= s->next_poll_ms) {
+        int32_t count = ((connected_fn)CONTROLLER(s, 22))(s->controller);
+        s->last_count = count < 0 ? 0 : count;
+        s->o->event("steam-input-controllers", count);
+    }
 }
 
 void sh_steam_input_end(struct sh_steam_input *s)
 {
+    if (s->output_view) UnmapViewOfFile(s->output_view);
+    if (s->output_map) CloseHandle(s->output_map);
+    s->output_view = NULL; s->output_map = NULL;
     if (!s->user) return;
     set_config_int_fn set = (set_config_int_fn)(*(void ***)s->user)[17];
     for (uint32_t store = 1; store <= SH_STORES; ++store) {
@@ -305,10 +429,10 @@ void sh_steam_input_end(struct sh_steam_input *s)
 }
 #else
 void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                            void *client_user, uint32_t appid, const struct dock_client_layout *layout,
+                            void *client_user, uint64_t steamid, uint32_t appid, const struct dock_client_layout *layout,
                             const struct sh_observer *o)
 {
-    (void)module; (void)engine; (void)pipe; (void)client_user; (void)appid; (void)layout;
+    (void)module; (void)engine; (void)pipe; (void)client_user; (void)steamid; (void)appid; (void)layout;
     memset(s, 0, sizeof *s);
     s->o = o;
 }

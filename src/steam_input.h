@@ -19,7 +19,21 @@ struct sh_steam_input {
      * it. focus_pid is the game process last reported. */
     void *utils;
     uint64_t gameid, next_focus_ms, activate_at_ms;
+    uint32_t account_id;
     DWORD focus_pid;
+    bool pad_connected, layout_queued;
+    unsigned sdl_attempts, layout_attempts, cache_waits;
+    uint64_t next_controller_ms;
+    /* Read-only observation of Valve's January XInput output stream. */
+    HANDLE output_map;
+    const uint8_t *output_view;
+    uint64_t next_output_ms;
+    int32_t output_reserved, output_connected;
+    uint8_t output_state[12];
+    bool output_changed;
+    /* CUtlString storage owned/reused by the client for the whole session. */
+    struct { const char *text; } selected_url;
+    uint64_t selected_workshop;
     /* The per-game override and the PlayStation setting as found in stores 1
      * to 4, restored at the end where changed_override has their bit (two bits
      * per store: override, PlayStation setting). */
@@ -34,7 +48,7 @@ struct sh_steam_input {
  * then the client is told the settings changed. The previous values come back
  * in sh_steam_input_end. */
 void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                            void *client_user, uint32_t appid, const struct dock_client_layout *layout,
+                            void *client_user, uint64_t steamid, uint32_t appid, const struct dock_client_layout *layout,
                             const struct sh_observer *o);
 /* After LaunchApp: the one question is asked SH_STEAM_INPUT_DELAY_MS later. */
 void sh_steam_input_start(struct sh_steam_input *s);

@@ -64,6 +64,11 @@ struct dock_client_layout {
      * before loading and activating a game's layout (traced in a newer
      * client, and SteamUI.dll's warm path). */
     uintptr_t controller_warm;
+    /* January serialized controller: slots 85 IsControllerConnected(index,
+     * bool), 124 GetConfigForAppAndController(index, app, workshop*, selection*).
+     * The latter refreshes the account's configuration before cache loading. */
+    uintptr_t controller_connected, controller_get_config;
+    uintptr_t controller_has_mapping; /* slot 128 HasGameMapping(app): parsed cache entry */
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);

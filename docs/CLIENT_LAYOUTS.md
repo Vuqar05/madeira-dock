@@ -253,3 +253,27 @@ All 149 slots name their methods the same way, so later steps can pin
 `GetConfigForAppAndController` (124) and others. `tools/check-client-layout.py`
 verifies slot 66's `+0x60` load and slot 22's name and function ID.
 `src/steam_input.c` runs only with `MADEIRA_DOCK_STEAM_INPUT=1`.
+
+
+### January Steam Input loader additions (2026-11-02)
+
+| Serialized slot | Method | RVA | IPC ID |
+|---|---|---|---|
+| 85 | IsControllerConnected(index, bool) | `0x814730` | `0x9a5a4987` |
+| 124 | GetConfigForAppAndController(index, const char *app, uint64 *workshop, CUtlString *selection) | `0x7487a0` | `0x143b8c3f` |
+| 128 | HasGameMapping(uint32 app) | `0x77bd00` | `0x35c300c2` |
+
+The checker validates RTTI entries, wrapper name references and IPC IDs. The
+server's HasGameMapping forwards to CSteamController slot 62 (`0x5d7e70`),
+which queries the parsed cache by controller/app through `0x5d4f30` and
+`0x5d23f0` and releases its locks. This is cache presence, not proof of XInput
+output. GetConfigForAppAndController returns a selection key, not a resolved
+URL. January SteamUI.dll's resolver (`0x544440`) adds `template://` to a bare
+template name; `AC-app-device` resolves through the controller-config app's
+local storage as `account/config/app/device.vdf`. Workshop IDs are returned
+separately. Dock reads bare templates, legacy template URLs and account-local
+autosaves, and keeps an unavailable personal/Workshop selection unchanged.
+The output CUtlString storage is reused for the session.
+
+LoadConfigFromVDFString and SetFocusedWindow have void returns. Their wrappers
+read only a response fencepost; interpreting a returned AL as success is invalid.

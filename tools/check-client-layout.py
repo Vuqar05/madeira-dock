@@ -17,7 +17,7 @@ source = (Path(__file__).resolve().parents[1] / 'src/client_layout.c').read_text
 block = re.search(r'"' + fingerprint + r'",\s*(\d+),([^}]+)', source)
 assert block, 'Unknown SHA-256; never infer a layout from similar metadata'
 rvas = [int(x, 16) for x in re.findall(r'0x[0-9a-f]+', block[2])]
-assert len(rvas) == 48
+assert len(rvas) == 51
 pe = struct.unpack_from('<I', raw, 0x3c)[0]
 assert raw[pe:pe+4] == b'PE\0\0' and struct.unpack_from('<H', raw, pe+4)[0] == 0x8664
 sections = struct.unpack_from('<H', raw, pe+6)[0]
@@ -62,7 +62,8 @@ groups = [('CSteamClient',[8,33,43],rvas[:3]),
           ('IClientUserMap',[18,17],rvas[38:40]),
           ('CSteamClient',[14],rvas[40:41]),
           ('IClientUtilsMap',[48,101],rvas[41:43]),
-          ('IClientControllerSerializedMap',[40,114,38,43,41],rvas[43:48])]
+          ('IClientControllerSerializedMap',[40,114,38,43,41],rvas[43:48]),
+          ('IClientControllerSerializedMap',[85,124,128],rvas[48:51])]
 for name,slots,expected in groups:
     if not any(expected):
         print(f'SKIP: {name} {slots} not pinned for this build (feature unavailable)')
@@ -157,3 +158,13 @@ if any(rvas[46:47]):
 if any(rvas[47:48]):
     assert names_method(rvas[47], 'WarmOptInStatus', 0x5b652962), 'slot 41 is not WarmOptInStatus'
     print('PASS: IClientControllerSerializedMap slot 41 (WarmOptInStatus)')
+
+if any(rvas[48:50]):
+    for rva, name, function_id in ((rvas[48], 'IsControllerConnected', 0x9a5a4987),
+                                   (rvas[49], 'GetConfigForAppAndController', 0x143b8c3f)):
+        assert names_method(rva, name, function_id), f'{hex(rva)} is not {name}'
+    print('PASS: controller slots 85/124 (connection readiness and selected layout)')
+
+if rvas[50]:
+    assert names_method(rvas[50], 'HasGameMapping', 0x35c300c2)
+    print('PASS: controller slot 128 (parsed app mapping cache)')

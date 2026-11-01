@@ -554,3 +554,48 @@ and results clear after 5 s. Dock's report uses CRLF; the app splits on any
 newline. Accepting an invite to a lobby the friend has left put the player in
 the friend's new lobby: Dock passes the invited lobby and the friend, so the
 game or the client followed the friend.
+
+
+## Steam Input loader corrections (2026-11-02)
+
+The January controller adapter now pins IsControllerConnected (85),
+GetConfigForAppAndController (124) and HasGameMapping (128), verified by the
+RTTI/name/IPC-ID checker. LoadConfigFromVDFString and SetFocusedWindow have void
+returns; old bool-success reports were invalid. Layout loading waits for the pad
+and the async cache, resolves the selected Steam-local file, resets the enable
+cache and warms before activation. It retries bounded setup failures and handles
+reconnections/refocus without continuously enumerating controllers. Tests in
+`tests/test-steam_input.c` exercise the production lifecycle under ASan/UBSan.
+
+The paired Madeira change supplies public_all/controller_base for existing and
+fresh installs, puts x64 SDL3 in the build/cache contract and fixes first-account
+and CRLF opt-in setup/recovery. The iOS build succeeds. One device retest found
+the initial path-vs-URL selection guard too strict; that guard is corrected.
+Further inspection established that selections are keys (bare template names or
+`AC-app-device` autosaves), not necessarily URLs. The resolver and sanitizer
+tests cover both forms. The subsequent device run queued the selected autosave,
+observed its cache entry and requested activation.
+
+A bounded read-only diagnostic opens the January client's existing
+`SteamXInput_mem-IPCWrapper` mapping (never creates or writes one): size 0x3e78,
+reserved/connected masks at 0/4, first XINPUT_STATE at 0x934. It excludes the
+packet counter when checking for gamepad changes. On the device, reserved and
+connected masks both became 1, followed by `steam-input-output-changed=1`.
+Valve's engine is producing gamepad output. A queue/activation log alone still
+must not be reported as proof that the game received controller input.
+
+The game overlay's `XInput Hooked` log was misleading: the preceding memory
+write failed. Madeira's server denies pseudo-process writes, including ones
+the overlay made to its own current-process pseudo-handle. The paired Madeira
+fix handles only that pseudo-handle locally, through W^X aliases where needed;
+other handles remain on the existing server path. Its ASan/UBSan memory tests
+and iOS runtime/app build pass.
+
+Final device test: the user confirmed the controller works in the game. The
+overlay log has nine XInput hook reports and zero `WriteProcessMemory` failures.
+The app log shows successful five-byte current-process writes and XInput slot 0
+connected as a Windows.Gaming.Input gamepad. Steam output remains connected and
+changing in the Dock report. This verifies input for the tested combination;
+other controller models, keyboard/mouse layouts and rumble remain untested.
+The production output diagnostic also has sanitizer tests for late mappings,
+failed views/cleanup, read-only access, packet-only changes and disconnection.

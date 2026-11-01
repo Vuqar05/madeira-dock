@@ -189,6 +189,23 @@ Wine's service manager reachable, prints one line and exits.
   under Dock; nothing is patched to hide that.
 - **A client update needs a new verified layout.** Until then Dock refuses the new build.
 
+## Experimental Steam Input
+
+With `MADEIRA_DOCK_STEAM_INPUT=1`, the January adapter initializes SDL gamepads,
+waits for the indexed controller, resolves the selected Steam layout, queues it
+for the client's cache and requests activation after the cache is present. A
+late controller or reconnection is handled independently of focus changes. The
+report distinguishes a queued request from a cached mapping and an activation
+request. The diagnostic also observes the client's Xbox output stream read-only
+and reports connection and state changes. Gamepad output also requires the
+Madeira runtime's current-process memory-write support so Valve's game overlay
+can install its XInput hooks.
+
+The Madeira integration supplies a 64-bit SDL3 and Valve's controller templates.
+A personal layout already cached under Steam's folder is retained; Dock does
+not replace an unavailable Workshop selection with a template. Unsupported
+client builds have no Steam Input adapter. See `docs/CLIENT_LAYOUTS.md`.
+
 ## Extra launch arguments
 
 `MADEIRA_STEAM_HOST_ARGUMENTS` adds bounded UTF-8 arguments to Valve's own
