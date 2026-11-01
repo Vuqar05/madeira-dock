@@ -15,7 +15,18 @@ struct sh_steam_input {
     const struct sh_observer *o;
     uint64_t next_poll_ms;
     int32_t last_count;
+    /* SteamController_PSSupport as found, restored at the end; -1 when unchanged. */
+    void *user;
+    int32_t saved_ps_support;
 };
+
+/* Before LaunchApp: Steam Input for PlayStation pads in every game ("2"), as
+ * desktop Steam's setting does, so the client builds this launch's opt-in mask
+ * with them. Only with MADEIRA_DOCK_STEAM_INPUT=1; the previous value comes back
+ * in sh_steam_input_end. */
+void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *client_user,
+                            const struct dock_client_layout *layout, const struct sh_observer *o);
+void sh_steam_input_end(struct sh_steam_input *s);
 
 void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
                          const struct dock_client_layout *layout, const struct sh_observer *o);

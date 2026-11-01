@@ -17,6 +17,13 @@
 #ifdef _WIN64
 typedef void *(__thiscall *get_controller_fn)(void *, int32_t);
 typedef int32_t (__thiscall *connected_fn)(void *);
+typedef bool (__thiscall *get_config_int_fn)(void *, uint32_t, const char *, int32_t *);
+typedef bool (__thiscall *set_config_int_fn)(void *, uint32_t, const char *, int32_t);
+
+/* The user's local config store, where the client reads the PlayStation opt-in
+ * (0 off, 1 games without PlayStation support, 2 every game). */
+#define SH_CONFIG_STORE_USER_LOCAL 3
+static const char ps_support[] = "SteamController_PSSupport";
 
 /* Off unless the app asks for it (MADEIRA_DOCK_STEAM_INPUT=1). */
 static bool enabled(void)
@@ -25,12 +32,42 @@ static bool enabled(void)
     return GetEnvironmentVariableW(L"MADEIRA_DOCK_STEAM_INPUT", value, 4) == 1 && value[0] == L'1';
 }
 
-void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                         const struct dock_client_layout *layout, const struct sh_observer *o)
+void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *client_user,
+                            const struct dock_client_layout *layout, const struct sh_observer *o)
 {
     memset(s, 0, sizeof *s);
     s->o = o;
     s->last_count = -1;
+    s->saved_ps_support = -1;
+    if (!enabled()) return;
+    uintptr_t base = (uintptr_t)module;
+    if (!layout || !dock_method_is(base, client_user, 18, layout->get_config_int) ||
+        !dock_method_is(base, client_user, 17, layout->set_config_int)) {
+        o->event("steam-input-ps-support", -1);
+        return;
+    }
+    int32_t value = 1;
+    if (!((get_config_int_fn)(*(void ***)client_user)[18])(client_user, SH_CONFIG_STORE_USER_LOCAL, ps_support, &value))
+        value = 1;   /* unset: the client's own default */
+    o->event("steam-input-ps-support", value);
+    if (value == 2) return;
+    bool set = ((set_config_int_fn)(*(void ***)client_user)[17])(client_user, SH_CONFIG_STORE_USER_LOCAL, ps_support, 2);
+    o->event("steam-input-ps-support-set", set);
+    if (set) { s->user = client_user; s->saved_ps_support = value; }
+}
+
+void sh_steam_input_end(struct sh_steam_input *s)
+{
+    if (!s->user) return;
+    ((set_config_int_fn)(*(void ***)s->user)[17])(s->user, SH_CONFIG_STORE_USER_LOCAL, ps_support, s->saved_ps_support);
+    s->o->event("steam-input-ps-support-restored", s->saved_ps_support);
+    s->user = NULL;
+}
+
+void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
+                         const struct dock_client_layout *layout, const struct sh_observer *o)
+{
+    s->o = o;
     if (!enabled()) return;
     uintptr_t base = (uintptr_t)module;
     if (!layout || !dock_method_is(base, engine, 66, layout->engine_controller)) {
@@ -55,11 +92,18 @@ void sh_steam_input_poll(struct sh_steam_input *s)
     s->o->event("steam-input-controllers", count);
 }
 #else
+void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *client_user,
+                            const struct dock_client_layout *layout, const struct sh_observer *o)
+{
+    (void)module; (void)client_user; (void)layout;
+    memset(s, 0, sizeof *s);
+    s->o = o;
+}
+void sh_steam_input_end(struct sh_steam_input *s) { (void)s; }
 void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
                          const struct dock_client_layout *layout, const struct sh_observer *o)
 {
     (void)module; (void)engine; (void)pipe; (void)layout;
-    memset(s, 0, sizeof *s);
     s->o = o;
 }
 void sh_steam_input_poll(struct sh_steam_input *s) { (void)s; }

@@ -40,7 +40,8 @@ int main(void)
     assert(!dock_method_is(base, &object, 13, sep->engine_friends));
     /* Steam Input: pinned for January only. */
     assert(jan->engine_controller == 0x943380 && jan->controller_count == 0x765790);
-    assert(!sep->engine_controller && !sep->controller_count);
+    assert(jan->get_config_int == 0x748980 && jan->set_config_int == 0x83a4e0);
+    assert(!sep->engine_controller && !sep->controller_count && !sep->get_config_int && !sep->set_config_int);
     vtable[66] = (void *)(base + jan->engine_controller);
     assert(dock_method_is(base, &object, 66, jan->engine_controller));
     assert(!dock_method_is(base, &object, 65, jan->engine_controller));

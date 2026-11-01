@@ -230,6 +230,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
     struct saved_value values[3] = {0};
     struct sh_friends friends;
     struct sh_steam_input steam_input;
+    bool steam_input_prepared = false;
     bool friends_started = false;
     /* ml1990: the public app sets MADEIRA_STEAM_HOST_CEG=1 only for an app
      * whose depot manifests flag CustomExecutable files, and records them in
@@ -266,6 +267,8 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         !publish(&values[1], (DWORD)steamid) || !publish(&values[2], GetCurrentProcessId())) goto done;
     o->event("launch-client-discovery-published", 1);
     SetConsoleCtrlHandler(on_control, TRUE);
+    sh_steam_input_prepare(&steam_input, module, client_user, layout, o);
+    steam_input_prepared = true;
     uint64_t gameid = appid;
     uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, launch_option, 0, user_arguments);
     o->event("launch-request-submitted", call != 0);
@@ -419,6 +422,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
     }
 done:
     if (friends_started) sh_friends_end(&friends);
+    if (steam_input_prepared) sh_steam_input_end(&steam_input);
     SetConsoleCtrlHandler(on_control, FALSE);
     bool restored = true;
     /* Another Steam process may have claimed registration while this host was

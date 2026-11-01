@@ -35,6 +35,9 @@ struct dock_client_layout {
      * slot 22 GetNumConnectedControllers. Zero where a build was not inspected:
      * the probe is then unavailable and the launch is unaffected. */
     uintptr_t engine_controller, controller_count;
+    /* Steam Input's PlayStation opt-in: IClientUserMap slots 18 GetConfigInt and
+     * 17 SetConfigInt (see CLIENT_LAYOUTS.md). */
+    uintptr_t get_config_int, set_config_int;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);
