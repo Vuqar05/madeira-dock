@@ -14,17 +14,20 @@ struct sh_steam_input {
     const struct sh_observer *o;
     uint64_t next_poll_ms;
     int32_t last_count;
-    /* SteamController_PSSupport as found, restored at the end; -1 when unchanged. */
+    /* The per-game override as found in stores 1 to 3, restored at the end
+     * for each store whose bit is set in changed_override. */
     void *user;
-    int32_t saved_ps_support;
+    char override_key[40];
+    int32_t saved_override[3];
+    uint32_t changed_override;
 };
 
-/* Before LaunchApp: Steam Input for PlayStation pads in every game ("2"), as
- * desktop Steam's setting does, then the client is told the setting changed,
- * so this launch's opt-in includes them. The previous value comes back in
- * sh_steam_input_end. */
+/* Before LaunchApp: the game's Steam Input override goes to "forced on", as
+ * desktop Steam's per-game setting does, then the client is told the setting
+ * changed, so this launch's opt-in includes every controller. The previous
+ * values come back in sh_steam_input_end. */
 void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                            void *client_user, const struct dock_client_layout *layout,
+                            void *client_user, uint32_t appid, const struct dock_client_layout *layout,
                             const struct sh_observer *o);
 /* After LaunchApp: the one question is asked SH_STEAM_INPUT_DELAY_MS later. */
 void sh_steam_input_start(struct sh_steam_input *s);

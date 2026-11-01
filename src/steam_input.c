@@ -8,6 +8,7 @@
  * research".
  */
 #include "steam_input.h"
+#include <stdio.h>
 #include <string.h>
 
 /* One question, this long after the launch: on device a poll once a second
@@ -23,10 +24,14 @@ typedef void (__thiscall *reset_cache_fn)(void *);
 typedef bool (__thiscall *get_config_int_fn)(void *, uint32_t, const char *, int32_t *);
 typedef bool (__thiscall *set_config_int_fn)(void *, uint32_t, const char *, int32_t);
 
-/* The user's local config store, where the client reads the PlayStation opt-in
- * (0 off, 1 games without PlayStation support, 2 every game). */
-#define SH_CONFIG_STORE_USER_LOCAL 3
+/* The client reads two keys when it builds a game's opt-in mask: the per-game
+ * Steam Input override (0 forced off, 1 default, 2 forced on) and the global
+ * PlayStation setting. Which IClientUser store number holds them is not known
+ * yet, so stores 1 to 4 are read and logged, and the override goes to "forced
+ * on" in stores 1 to 3 (docs/STEAM_INPUT.md). */
 static const char ps_support[] = "SteamController_PSSupport";
+#define SH_OVERRIDE_DEFAULT 1
+#define SH_OVERRIDE_ON 2
 
 #define CONTROLLER(s, n) ((*(void ***)(s)->controller)[n])
 
@@ -47,13 +52,12 @@ static void settings_changed(struct sh_steam_input *s)
 }
 
 void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                            void *client_user, const struct dock_client_layout *layout,
+                            void *client_user, uint32_t appid, const struct dock_client_layout *layout,
                             const struct sh_observer *o)
 {
     memset(s, 0, sizeof *s);
     s->o = o;
     s->last_count = -1;
-    s->saved_ps_support = -1;
     if (!enabled()) return;
     uintptr_t base = (uintptr_t)module;
     if (!layout || !dock_method_is(base, engine, 66, layout->engine_controller)) {
@@ -71,20 +75,31 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
     o->event("steam-input-available", 1);
     if (!dock_method_is(base, client_user, 18, layout->get_config_int) ||
         !dock_method_is(base, client_user, 17, layout->set_config_int)) {
-        o->event("steam-input-ps-support", -1);
+        o->event("steam-input-config", -1);
         return;
     }
-    int32_t value = 1;
-    if (!((get_config_int_fn)(*(void ***)client_user)[18])(client_user, SH_CONFIG_STORE_USER_LOCAL, ps_support, &value))
-        value = 1;   /* unset: the client's own default */
-    o->event("steam-input-ps-support", value);
-    if (value != 2) {
-        bool set = ((set_config_int_fn)(*(void ***)client_user)[17])(client_user, SH_CONFIG_STORE_USER_LOCAL, ps_support, 2);
-        o->event("steam-input-ps-support-set", set);
-        if (!set) return;
-        s->user = client_user;
-        s->saved_ps_support = value;
+    get_config_int_fn get = (get_config_int_fn)(*(void ***)client_user)[18];
+    set_config_int_fn set = (set_config_int_fn)(*(void ***)client_user)[17];
+    snprintf(s->override_key, sizeof s->override_key, "%u\\UseSteamControllerConfig", appid);
+    static const char *const ps_events[] = {"steam-input-store1-ps", "steam-input-store2-ps",
+                                            "steam-input-store3-ps", "steam-input-store4-ps"};
+    static const char *const app_events[] = {"steam-input-store1-app", "steam-input-store2-app",
+                                             "steam-input-store3-app", "steam-input-store4-app"};
+    static const char *const set_events[] = {"steam-input-store1-set", "steam-input-store2-set",
+                                             "steam-input-store3-set"};
+    for (uint32_t store = 1; store <= 4; ++store) {
+        int32_t value = 0;
+        o->event(ps_events[store - 1], get(client_user, store, ps_support, &value) ? value : -1);
+        value = 0;
+        bool found = get(client_user, store, s->override_key, &value);
+        o->event(app_events[store - 1], found ? value : -1);
+        if (store > 3) break;
+        s->saved_override[store - 1] = found ? value : SH_OVERRIDE_DEFAULT;
+        bool done = set(client_user, store, s->override_key, SH_OVERRIDE_ON);
+        o->event(set_events[store - 1], done);
+        if (done) s->changed_override |= 1u << (store - 1);
     }
+    if (s->changed_override) s->user = client_user;
     settings_changed(s);
 }
 
@@ -104,16 +119,19 @@ void sh_steam_input_poll(struct sh_steam_input *s)
 void sh_steam_input_end(struct sh_steam_input *s)
 {
     if (!s->user) return;
-    ((set_config_int_fn)(*(void ***)s->user)[17])(s->user, SH_CONFIG_STORE_USER_LOCAL, ps_support, s->saved_ps_support);
-    s->o->event("steam-input-ps-support-restored", s->saved_ps_support);
+    set_config_int_fn set = (set_config_int_fn)(*(void ***)s->user)[17];
+    for (uint32_t store = 1; store <= 3; ++store)
+        if (s->changed_override & (1u << (store - 1)))
+            set(s->user, store, s->override_key, s->saved_override[store - 1]);
+    s->o->event("steam-input-override-restored", (int32_t)s->changed_override);
     s->user = NULL;
 }
 #else
 void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
-                            void *client_user, const struct dock_client_layout *layout,
+                            void *client_user, uint32_t appid, const struct dock_client_layout *layout,
                             const struct sh_observer *o)
 {
-    (void)module; (void)engine; (void)pipe; (void)client_user; (void)layout;
+    (void)module; (void)engine; (void)pipe; (void)client_user; (void)appid; (void)layout;
     memset(s, 0, sizeof *s);
     s->o = o;
 }

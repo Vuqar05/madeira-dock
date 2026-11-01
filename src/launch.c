@@ -267,7 +267,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         !publish(&values[1], (DWORD)steamid) || !publish(&values[2], GetCurrentProcessId())) goto done;
     o->event("launch-client-discovery-published", 1);
     SetConsoleCtrlHandler(on_control, TRUE);
-    sh_steam_input_prepare(&steam_input, module, engine, pipe, client_user, layout, o);
+    sh_steam_input_prepare(&steam_input, module, engine, pipe, client_user, appid, layout, o);
     steam_input_prepared = true;
     uint64_t gameid = appid;
     uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, launch_option, 0, user_arguments);
