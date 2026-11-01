@@ -57,6 +57,9 @@ struct dock_client_layout {
      * const void *optional, uint64, const void *info): how desktop Steam's UI
      * (SteamUI.dll) hands the client a layout's text for its config cache. */
     uintptr_t controller_load_vdf;
+    /* Slot 43 CreateBindingInstanceFromVDFString(const char *vdf): the binding
+     * handle slot 38 adopts. */
+    uintptr_t controller_binding;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);

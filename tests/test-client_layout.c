@@ -46,6 +46,7 @@ int main(void)
     assert(jan->controller_activate == 0x704ce0 && !sep->controller_activate);
     assert(jan->controller_select == 0x84c100 && !sep->controller_select);
     assert(jan->controller_load_vdf == 0x81caa0 && !sep->controller_load_vdf);
+    assert(jan->controller_binding == 0x7261a0 && !sep->controller_binding);
     assert(!sep->engine_utils && !sep->utils_set_focused && !sep->utils_get_focused);
     assert(!sep->engine_controller && !sep->controller_count && !sep->get_config_int && !sep->set_config_int);
     vtable[66] = (void *)(base + jan->engine_controller);

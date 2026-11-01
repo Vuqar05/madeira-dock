@@ -35,6 +35,7 @@ static const wchar_t gamepad_template_file[] = L"\\controller_base\\templates\\c
 /* The 28-byte block the cache copies with each layout (CSteamController
  * slot 106 refuses NULL); desktop Steam's values are not known, zero here. */
 struct sh_config_info { uint8_t bytes[28]; };
+typedef uint32_t (__thiscall *binding_fn)(void *, const char *);
 typedef bool (__thiscall *load_vdf_fn)(void *, uint32_t, uint32_t, const char *, const void *, uint64_t,
                                        const struct sh_config_info *);
 
@@ -112,7 +113,8 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
         !dock_method_is(base, controller, 131, layout->controller_reset_cache) ||
         !dock_method_is(base, controller, 40, layout->controller_activate) ||
         !dock_method_is(base, controller, 114, layout->controller_select) ||
-        !dock_method_is(base, controller, 38, layout->controller_load_vdf)) {
+        !dock_method_is(base, controller, 38, layout->controller_load_vdf) ||
+        !dock_method_is(base, controller, 43, layout->controller_binding)) {
         o->event("steam-input-available", 0);
         return;
     }
@@ -230,7 +232,11 @@ static void report_focus(struct sh_steam_input *s)
     char *vdf = read_template();
     if (vdf) {
         struct sh_config_info info = {{0}};
-        bool loaded = ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, 0, &info);
+        /* The cache adopts a binding made from the same text ("adopting
+         * binding N"); with handle 0 it adopted none. */
+        uint32_t binding = ((binding_fn)CONTROLLER(s, 43))(s->controller, vdf);
+        s->o->event("steam-input-binding", (int32_t)binding);
+        bool loaded = ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, binding, &info);
         HeapFree(GetProcessHeap(), 0, vdf);
         s->o->event("steam-input-layout-loaded", loaded ? 1 : 0);
     } else s->o->event("steam-input-layout-loaded", -1);
