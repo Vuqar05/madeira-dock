@@ -19,6 +19,6 @@ struct sh_steam_input {
 
 void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
                          const struct dock_client_layout *layout, const struct sh_observer *o);
-/* Rate-limited; call from the launch loop. */
+/* Asks once, SH_STEAM_INPUT_DELAY_MS after init; call from the launch loop. */
 void sh_steam_input_poll(struct sh_steam_input *s);
 #endif

@@ -9,7 +9,10 @@
 #include "steam_input.h"
 #include <string.h>
 
-#define SH_STEAM_INPUT_POLL_MS 1000
+/* One question, this long after the launch: on device a poll once a second
+ * coincided with the game's audio breaking up (docs/STEAM_INPUT.md), so the
+ * probe asks once to tell the first call from the polling. */
+#define SH_STEAM_INPUT_DELAY_MS 15000
 
 #ifdef _WIN64
 typedef void *(__thiscall *get_controller_fn)(void *, int32_t);
@@ -40,20 +43,16 @@ void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine,
         return;
     }
     s->controller = controller;
+    s->next_poll_ms = o->now_ms() + SH_STEAM_INPUT_DELAY_MS;
     o->event("steam-input-available", 1);
 }
 
 void sh_steam_input_poll(struct sh_steam_input *s)
 {
-    if (!s->controller) return;
-    uint64_t now = s->o->now_ms();
-    if (now < s->next_poll_ms) return;
-    s->next_poll_ms = now + SH_STEAM_INPUT_POLL_MS;
+    if (!s->controller || s->last_count >= 0 || s->o->now_ms() < s->next_poll_ms) return;
     int32_t count = ((connected_fn)(*(void ***)s->controller)[22])(s->controller);
-    if (count != s->last_count) {
-        s->last_count = count;
-        s->o->event("steam-input-controllers", count);
-    }
+    s->last_count = count < 0 ? 0 : count;
+    s->o->event("steam-input-controllers", count);
 }
 #else
 void sh_steam_input_init(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
