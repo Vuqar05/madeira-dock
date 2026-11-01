@@ -33,8 +33,18 @@ typedef void (__thiscall *select_fn)(void *, uint32_t, const struct sh_utl_strin
 static const char gamepad_template[] = "template://controller_ps5_gamepad_joystick.vdf";
 static const wchar_t gamepad_template_file[] = L"\\controller_base\\templates\\controller_ps5_gamepad_joystick.vdf";
 /* The 28-byte block the cache copies with each layout (CSteamController
- * slot 106 refuses NULL); desktop Steam's values are not known, zero here. */
-struct sh_config_info { uint8_t bytes[28]; };
+ * slot 106 refuses NULL). SteamUI.dll passes these defaults, the same the
+ * client gives a new cache entry; zeros made the layout unusable. */
+struct sh_config_info {
+    int32_t one;
+    uint8_t flag04;
+    int32_t minus08;
+    uint16_t value0c;
+    int32_t minus10;
+    uint8_t flag14;
+    int32_t kind18; /* 1; 4 for Steam's own desktop layout (app 769) */
+};
+_Static_assert(sizeof(struct sh_config_info) == 28, "SteamUI's info block is 28 bytes");
 /* What CreateBindingInstanceFromVDFString reads (CSteamController slot 113,
  * parser 0x62dc30): +0x00 the VDF text, loaded as "controller_mappings";
  * +0x18 a URL. Other fields are strings (NULL reads as ""), numbers and
@@ -242,13 +252,9 @@ static void report_focus(struct sh_steam_input *s)
      * cache. Without the UI nothing fills it, so Dock does. */
     char *vdf = read_template();
     if (vdf) {
-        struct sh_config_info info = {{0}};
-        /* The cache adopts a binding made from the same text ("adopting
-         * binding N"); with handle 0 it adopted none. */
-        struct sh_binding_source source = {vdf, NULL, 0, gamepad_template, {0}};
-        uint32_t binding = ((binding_fn)CONTROLLER(s, 43))(s->controller, &source);
-        s->o->event("steam-input-binding", (int32_t)binding);
-        bool loaded = ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, binding, &info);
+        struct sh_config_info info = {1, 0, -1, 0x140, -1, 0, 1};
+        /* As SteamUI.dll's call: no optional block, 0 for the uint64. */
+        bool loaded = ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, 0, &info);
         HeapFree(GetProcessHeap(), 0, vdf);
         s->o->event("steam-input-layout-loaded", loaded ? 1 : 0);
     } else s->o->event("steam-input-layout-loaded", -1);
