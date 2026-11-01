@@ -23,6 +23,9 @@ typedef void (__thiscall *ps_changed_fn)(void *, bool);
 typedef void (__thiscall *reset_cache_fn)(void *);
 typedef bool (__thiscall *get_config_int_fn)(void *, uint32_t, const char *, int32_t *);
 typedef bool (__thiscall *set_config_int_fn)(void *, uint32_t, const char *, int32_t);
+typedef void *(__thiscall *get_utils_fn)(void *, int32_t);
+typedef bool (__thiscall *set_focused_fn)(void *, const uint64_t *, bool, bool, uint32_t, uint16_t, uint16_t);
+typedef uint64_t *(__thiscall *get_focused_fn)(void *, uint64_t *);
 
 /* The client reads two keys when it builds a game's opt-in mask: the per-game
  * Steam Input override (0 forced off, 1 default, 2 forced on) and the global
@@ -78,6 +81,12 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
     }
     s->controller = controller;
     o->event("steam-input-available", 1);
+    s->gameid = appid; /* CGameID of a Steam app: the app ID, type 0 */
+    if (dock_method_is(base, engine, 14, layout->engine_utils)) {
+        void *utils = ((get_utils_fn)(*(void ***)engine)[14])(engine, pipe);
+        if (utils && dock_method_is(base, utils, 48, layout->utils_set_focused) &&
+            dock_method_is(base, utils, 101, layout->utils_get_focused)) s->utils = utils;
+    }
     if (!dock_method_is(base, client_user, 18, layout->get_config_int) ||
         !dock_method_is(base, client_user, 17, layout->set_config_int)) {
         o->event("steam-input-config", -1);
@@ -147,8 +156,33 @@ static void start_sdl_gamepads(struct sh_steam_input *s)
     s->o->event("steam-input-sdl-joysticks", count);
 }
 
+/* Steam Input activates a game's layout ("Queueing activation for
+ * controller") for the game that has focus, which desktop Steam's UI reports
+ * through IClientUtils::SetFocusedWindow. A headless client has no UI, so Dock
+ * reports the foreground window's process once it is another process, and
+ * again when it changes: a window lookup each second, a client call only on
+ * a change. Arguments: the game, focused, not the overlay, its process. */
+static void report_focus(struct sh_steam_input *s)
+{
+    DWORD pid = 0;
+    HWND window = GetForegroundWindow();
+    if (window) GetWindowThreadProcessId(window, &pid);
+    if (!pid || pid == GetCurrentProcessId() || pid == s->focus_pid) return;
+    s->focus_pid = pid;
+    s->o->event("steam-input-focus-pid", (int32_t)pid);
+    bool done = ((set_focused_fn)(*(void ***)s->utils)[48])(s->utils, &s->gameid, true, false, pid, 0, 0);
+    s->o->event("steam-input-focus-set", done ? 1 : 0);
+    uint64_t focused = 0;
+    ((get_focused_fn)(*(void ***)s->utils)[101])(s->utils, &focused);
+    s->o->event("steam-input-focused-app", (int32_t)(focused & 0xffffff));
+}
+
 void sh_steam_input_poll(struct sh_steam_input *s)
 {
+    if (s->utils && s->next_poll_ms && s->o->now_ms() >= s->next_focus_ms) {
+        s->next_focus_ms = s->o->now_ms() + 1000;
+        report_focus(s);
+    }
     if (s->controller && !s->sdl_started && s->o->now_ms() >= s->next_sdl_ms) {
         s->next_sdl_ms = s->o->now_ms() + 500;
         start_sdl_gamepads(s);

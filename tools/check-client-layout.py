@@ -17,7 +17,7 @@ source = (Path(__file__).resolve().parents[1] / 'src/client_layout.c').read_text
 block = re.search(r'"' + fingerprint + r'",\s*(\d+),([^}]+)', source)
 assert block, 'Unknown SHA-256; never infer a layout from similar metadata'
 rvas = [int(x, 16) for x in re.findall(r'0x[0-9a-f]+', block[2])]
-assert len(rvas) == 40
+assert len(rvas) == 43
 pe = struct.unpack_from('<I', raw, 0x3c)[0]
 assert raw[pe:pe+4] == b'PE\0\0' and struct.unpack_from('<H', raw, pe+4)[0] == 0x8664
 sections = struct.unpack_from('<H', raw, pe+6)[0]
@@ -59,7 +59,9 @@ groups = [('CSteamClient',[8,33,43],rvas[:3]),
           ('IClientSharedConnectionMap',[0,2],rvas[32:34]),
           ('CSteamClient',[66],rvas[34:35]),
           ('IClientControllerSerializedMap',[22,80,131],rvas[35:38]),
-          ('IClientUserMap',[18,17],rvas[38:40])]
+          ('IClientUserMap',[18,17],rvas[38:40]),
+          ('CSteamClient',[14],rvas[40:41]),
+          ('IClientUtilsMap',[48,101],rvas[41:43])]
 for name,slots,expected in groups:
     if not any(expected):
         print(f'SKIP: {name} {slots} not pinned for this build (feature unavailable)')
@@ -130,3 +132,12 @@ if any(rvas[36:40]):
                                    (rvas[38], 'GetConfigInt', 0xdbd03034), (rvas[39], 'SetConfigInt', 0x73d481e3)):
         assert names_method(rva, name, function_id), f'{hex(rva)} is not {name}'
     print('PASS: controller slots 80/131 and IClientUserMap slots 18/17 name their methods and IPC IDs')
+
+# Steam Input focus: slot 14 must return the pipe-level interface stored at
+# 0x18 (IClientUtilsMap); slots 48 and 101 must name SetFocusedWindow and
+# GetFocusedGameID and serialize their IPC function IDs.
+if any(rvas[40:43]):
+    assert b'\x48\x8b\x5c\x01\x18' in image[rvas[40]:rvas[40]+0x100], 'slot 14 does not return the 0x18 interface'
+    for rva, name, function_id in ((rvas[41], 'SetFocusedWindow', 0x54ebb160), (rvas[42], 'GetFocusedGameID', 0xef80532b)):
+        assert names_method(rva, name, function_id), f'{hex(rva)} is not {name}'
+    print('PASS: CSteamClient slot 14 and IClientUtilsMap slots 48/101 (SetFocusedWindow, GetFocusedGameID)')

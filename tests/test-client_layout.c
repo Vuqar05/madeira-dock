@@ -42,6 +42,8 @@ int main(void)
     assert(jan->engine_controller == 0x943380 && jan->controller_count == 0x765790);
     assert(jan->controller_ps_changed == 0x821920 && jan->controller_reset_cache == 0x82f010);
     assert(jan->get_config_int == 0x748980 && jan->set_config_int == 0x83a4e0);
+    assert(jan->engine_utils == 0x945220 && jan->utils_set_focused == 0x83ed90 && jan->utils_get_focused == 0x751780);
+    assert(!sep->engine_utils && !sep->utils_set_focused && !sep->utils_get_focused);
     assert(!sep->engine_controller && !sep->controller_count && !sep->get_config_int && !sep->set_config_int);
     vtable[66] = (void *)(base + jan->engine_controller);
     assert(dock_method_is(base, &object, 66, jan->engine_controller));

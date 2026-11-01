@@ -41,6 +41,11 @@ struct dock_client_layout {
     /* Steam Input's PlayStation opt-in: IClientUserMap slots 18 GetConfigInt and
      * 17 SetConfigInt (see CLIENT_LAYOUTS.md). */
     uintptr_t get_config_int, set_config_int;
+    /* Which game has focus, as desktop Steam's UI reports it: CSteamClient slot
+     * 14 GetIClientUtils(pipe), IClientUtilsMap slots 48 SetFocusedWindow and
+     * 101 GetFocusedGameID. Steam Input activates a game's layout for the
+     * focused game only (see CLIENT_LAYOUTS.md). */
+    uintptr_t engine_utils, utils_set_focused, utils_get_focused;
 };
 const struct dock_client_layout *dock_client_layout(const char *sha256);
 bool dock_method_is(uintptr_t module, void *object, unsigned slot, uintptr_t rva);
