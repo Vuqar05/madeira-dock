@@ -27,11 +27,16 @@ typedef bool (__thiscall *set_config_int_fn)(void *, uint32_t, const char *, int
 /* The client reads two keys when it builds a game's opt-in mask: the per-game
  * Steam Input override (0 forced off, 1 default, 2 forced on) and the global
  * PlayStation setting. Which IClientUser store number holds them is not known
- * yet, so stores 1 to 4 are read and logged, and the override goes to "forced
- * on" in stores 1 to 3 (docs/STEAM_INPUT.md). */
+ * yet, so in stores 1 to 4 both are read and logged, the override goes to
+ * "forced on" (the game's mask) and the PlayStation setting to "every game"
+ * (the client-wide mask, which decides which pads the client opens); see
+ * docs/STEAM_INPUT.md. */
 static const char ps_support[] = "SteamController_PSSupport";
 #define SH_OVERRIDE_DEFAULT 1
 #define SH_OVERRIDE_ON 2
+#define SH_PS_DEFAULT 1   /* games without PlayStation support */
+#define SH_PS_ALL 2
+#define SH_STORES 4
 
 #define CONTROLLER(s, n) ((*(void ***)(s)->controller)[n])
 
@@ -86,18 +91,22 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
     static const char *const app_events[] = {"steam-input-store1-app", "steam-input-store2-app",
                                              "steam-input-store3-app", "steam-input-store4-app"};
     static const char *const set_events[] = {"steam-input-store1-set", "steam-input-store2-set",
-                                             "steam-input-store3-set"};
-    for (uint32_t store = 1; store <= 4; ++store) {
+                                             "steam-input-store3-set", "steam-input-store4-set"};
+    for (uint32_t store = 1; store <= SH_STORES; ++store) {
+        unsigned i = store - 1;
         int32_t value = 0;
-        o->event(ps_events[store - 1], get(client_user, store, ps_support, &value) ? value : -1);
+        bool found = get(client_user, store, ps_support, &value);
+        o->event(ps_events[i], found ? value : -1);
+        s->saved_ps[i] = found ? value : SH_PS_DEFAULT;
         value = 0;
-        bool found = get(client_user, store, s->override_key, &value);
-        o->event(app_events[store - 1], found ? value : -1);
-        if (store > 3) break;
-        s->saved_override[store - 1] = found ? value : SH_OVERRIDE_DEFAULT;
-        bool done = set(client_user, store, s->override_key, SH_OVERRIDE_ON);
-        o->event(set_events[store - 1], done);
-        if (done) s->changed_override |= 1u << (store - 1);
+        found = get(client_user, store, s->override_key, &value);
+        o->event(app_events[i], found ? value : -1);
+        s->saved_override[i] = found ? value : SH_OVERRIDE_DEFAULT;
+        /* bit 0 the override, bit 1 the PlayStation setting */
+        int32_t done = set(client_user, store, s->override_key, SH_OVERRIDE_ON) ? 1 : 0;
+        if (set(client_user, store, ps_support, SH_PS_ALL)) done |= 2;
+        o->event(set_events[i], done);
+        s->changed_override |= (uint32_t)done << (2 * i);
     }
     if (s->changed_override) s->user = client_user;
     settings_changed(s);
@@ -120,9 +129,11 @@ void sh_steam_input_end(struct sh_steam_input *s)
 {
     if (!s->user) return;
     set_config_int_fn set = (set_config_int_fn)(*(void ***)s->user)[17];
-    for (uint32_t store = 1; store <= 3; ++store)
-        if (s->changed_override & (1u << (store - 1)))
-            set(s->user, store, s->override_key, s->saved_override[store - 1]);
+    for (uint32_t store = 1; store <= SH_STORES; ++store) {
+        uint32_t done = s->changed_override >> (2 * (store - 1));
+        if (done & 1) set(s->user, store, s->override_key, s->saved_override[store - 1]);
+        if (done & 2) set(s->user, store, ps_support, s->saved_ps[store - 1]);
+    }
     s->o->event("steam-input-override-restored", (int32_t)s->changed_override);
     s->user = NULL;
 }

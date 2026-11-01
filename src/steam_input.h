@@ -14,18 +14,19 @@ struct sh_steam_input {
     const struct sh_observer *o;
     uint64_t next_poll_ms;
     int32_t last_count;
-    /* The per-game override as found in stores 1 to 3, restored at the end
-     * for each store whose bit is set in changed_override. */
+    /* The per-game override and the PlayStation setting as found in stores 1
+     * to 4, restored at the end where changed_override has their bit (two bits
+     * per store: override, PlayStation setting). */
     void *user;
     char override_key[40];
-    int32_t saved_override[3];
+    int32_t saved_override[4], saved_ps[4];
     uint32_t changed_override;
 };
 
-/* Before LaunchApp: the game's Steam Input override goes to "forced on", as
- * desktop Steam's per-game setting does, then the client is told the setting
- * changed, so this launch's opt-in includes every controller. The previous
- * values come back in sh_steam_input_end. */
+/* Before LaunchApp: the game's Steam Input override goes to "forced on" and
+ * the PlayStation setting to "every game", as desktop Steam's settings do,
+ * then the client is told the settings changed. The previous values come back
+ * in sh_steam_input_end. */
 void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engine, int32_t pipe,
                             void *client_user, uint32_t appid, const struct dock_client_layout *layout,
                             const struct sh_observer *o);
