@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 125hz
+// Madeira Converter Exception: see LICENSE-EXCEPTION.md
+// Diagnostic only: native PS5 face-button fixture; A/B reversed, no keyboard/mouse.
+"controller_mappings"
+{
+    "version" "3"
+    "revision" "731"
+    "title" "Madeira revision probe"
+    "controller_type" "controller_ps5"
+    "group"
+    {
+        "id" "0"
+        "mode" "four_buttons"
+        "inputs"
+        {
+            "button_a"
+            {
+                "activators"
+                {
+                    "Full_Press"
+                    {
+                        "bindings" { "binding" "xinput_button B" }
+                    }
+                }
+            }
+            "button_b"
+            {
+                "activators"
+                {
+                    "Full_Press"
+                    {
+                        "bindings" { "binding" "xinput_button A" }
+                    }
+                }
+            }
+            "button_x"
+            {
+                "activators"
+                {
+                    "Full_Press"
+                    {
+                        "bindings" { "binding" "xinput_button X" }
+                    }
+                }
+            }
+            "button_y"
+            {
+                "activators"
+                {
+                    "Full_Press"
+                    {
+                        "bindings" { "binding" "xinput_button Y" }
+                    }
+                }
+            }
+        }
+    }
+    "preset"
+    {
+        "id" "0"
+        "name" "Probe"
+        "group_source_bindings" { "0" "button_diamond active" }
+    }
+}

@@ -13,12 +13,34 @@ fi
 [[ -n "$compiler" ]] || { echo "No clang found; set HOST_CC to a clang with ASan/UBSan" >&2; exit 1; }
 output=.build/tests
 mkdir -p "$output"
-for test in probe validation auth client_layout friends_format; do
+for test in probe validation auth client_layout friends_format steam_input_service; do
     "$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
         -Isrc "src/$test.c" "tests/test-$test.c" -o "$output/test-$test"
     "$output/test-$test"
 done
 
 "$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -Isrc src/client_layout.c tests/test-steam_input.c -o "$output/test-steam_input"
+    -Isrc src/steam_input_service.c tests/test-steam_input_transaction.c -o "$output/test-steam_input_transaction"
+
+"$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -Isrc src/steam_input_service.c tests/test-steam_input_transport.c -o "$output/test-steam_input_transport"
+"$output/test-steam_input_transport"
+"$output/test-steam_input_transaction"
+
+"$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -Isrc src/steam_input_service.c tests/test-steam_input_transport.c -o "$output/test-steam_input_transport"
+"$output/test-steam_input_transport"
+
+"$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -Isrc src/client_layout.c src/steam_input_service.c tests/test-steam_input.c -o "$output/test-steam_input"
+
+"$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DSH_STEAM_INPUT_REVISION_PROBE=1 -Isrc src/client_layout.c src/steam_input_service.c \
+    tests/test-steam_input.c -o "$output/test-steam_input-probe"
+"$output/test-steam_input-probe"
 "$output/test-steam_input"
+
+"$compiler" -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DSH_STEAM_INPUT_LOCAL_APPLY=1 -Isrc src/client_layout.c src/steam_input_service.c \
+    tests/test-steam_input.c -o "$output/test-steam_input-local"
+"$output/test-steam_input-local"

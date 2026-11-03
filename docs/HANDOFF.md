@@ -599,3 +599,436 @@ changing in the Dock report. This verifies input for the tested combination;
 other controller models, keyboard/mouse layouts and rumble remain untested.
 The production output diagnostic also has sanitizer tests for late mappings,
 failed views/cleanup, read-only access, packet-only changes and disconnection.
+
+
+## Steam Input session query service (2026-11-02)
+
+`steam_input_service.{c,h}` adds portable bounded wire parsing, scope/lease/
+sequence gating and feed encoding. `steam_input.c` atomically publishes the
+feed and claims commands through a separate processing file. It reuses only
+already pinned methods; the pinned January binary checker still passes.
+The service is opted in with a random per-launch nonce from Madeira's protected
+auth handoff. Its complete version-1 wire contract is in README. Query and
+existing-source discovery work; apply/reset return result 7 without loading,
+selecting or activating anything. State and flags distinguish queueing, generic
+cache presence and activation request; there is no active-revision claim.
+A startup fallback selected by Dock is flagged so migration cannot misidentify
+it as a pre-existing Steam selection.
+
+The app uses its existing report poll to read the bounded feed and queries once
+per observed connection, at most three attempts with ten-second response bounds.
+It preserves the original Steam selection alongside an explicit Madeira request
+in the account/game/controller-scoped atomic store. Corrupt or unknown-schema
+stores are retained. The controller UUID currently names the virtual slot-0
+bridge; physical-device identity and player assignment are outstanding. Input
+capabilities describe transport groups, not every paired pad: buttons, sticks,
+analog triggers, optional Sony touch click; no motion or touch coordinates.
+
+Validation: full native Dock ASan/UBSan suites (including production file-service
+lifecycle with mock Windows I/O), Swift selection/settings regressions and a
+cross-language C-feed/Swift-command/migration test pass. Both PE architectures
+cross-compile with warnings as errors. The real pinned January binary check and
+privacy scan pass. No runtime binary was staged, full iOS app built or device
+acceptance performed. Rebuild app and host together to test this service.
+Next: prove the active-revision acknowledgement against the pinned client, then
+route a distinctive local fixture through acknowledged apply/restore/rollback.
+No new private ABI is enabled, and milestone 1 is not complete.
+`CLIENT_LAYOUTS.md` records statically identified slot-45 configuration and
+slot-65 revision getter candidates for the next server/caller investigation;
+their active-binding semantics and lifetimes are not established.
+
+
+## Configuration-load observation and iPad test build (2026-11-02)
+
+The next investigation established that slot 45 takes a binding-object handle,
+not a controller index: its server looks up the binding tree and serializes the
+object. Slot 65 reads revisions from that same tree. Neither is an active-layout
+getter; the runtime does not call them. Public configuration-load callback 2803
+is now observed from the launch callback loop with exact x64 bounds, App ID
+filtering and capped numeric diagnostics. Creator is deliberately skipped and
+no device/creator identifiers are logged. Manifest revisions do not acknowledge
+an exact content hash; the apply/default service operations remain disabled.
+See CLIENT_LAYOUTS.md for the binary and public documentation evidence.
+
+The new parser and production observer filtering/cap have sanitizer coverage;
+the full Dock suite, Swift service/selection/settings tests and real pinned
+binary checker pass. The x64 host was rebuilt/staged into a full Debug iOS
+app, successfully built with Xcode and signed using existing development
+profiles. The test app was installed over the existing iPad app and labeled
+`Steam Input M1 · 11-02`. No account or prefix was reset. The staged host is
+67,072 bytes, SHA-256
+`514af62bcfc49e47539a92673a6a2156772ce14a151b3e26871d3c45f5addc93`;
+the app-bundled copy matches. Device test pending: enable JIT, launch a Steam
+Input game with a paired controller, collect the query feed/result and bounded
+configuration-loaded observations, then reconnect and relaunch. Do not report
+this installation as acknowledgement/apply/restore acceptance.
+
+
+### First M1 device run and corrected dependency package
+
+The first service feed was valid but disconnected: adapter available, epoch 0,
+sequence/result 0, no selection. Dock reported zero controllers and no SDL-init
+event. The directly built test app omitted x64 SDL3, so this run did not validate
+query/migration or configuration-loaded delivery. The test-build preparation
+failed to check the complete Dock runtime dependency set before installing.
+
+The paired Madeira fix makes `build/madeira-dock/build.sh` build/stage SDL3 and
+its notice on its direct path as well as through the runtime component entry
+point (the redundant wrapper build is removed). Runtime validation now requires
+x86-64 specifically for SDL3, and tests reject missing dependency/notice files
+and i386, ARM64EC or ARM64 DLLs. All 13 runtime-contract tests and Dock sanitizer
+suites pass. The source-built SDL3 is 2,993,152 bytes, SHA-256
+`c94ff406113ff5661c5020b657075cebfce41c939d96a2e6d23d3c12e57ed9da`.
+All four required Dock files were checked in the corrected signed app bundle;
+`Steam Input M1 R2 · 11-02` was installed over the existing app. Its game run
+and service/callback acceptance are pending. The host binary is unchanged.
+
+
+### R2 device service validation (2026-11-02)
+
+The iPad run reports SDL init success, one SDL joystick/controller, selected
+account-local autosave source 6, queued layout, generic mapping cache present
+and activation requested. Valve's Xbox output is connected and changes. Callback
+2803 reaches Dock with manifest major/minor 0/0 and flags 2 (gamepad output).
+The version-1 service feed has epoch 1 and query sequence/result 1/1; the app's
+persisted record matches the feed's game/key/Workshop identity, keeps the explicit
+choice absent and does not mark any revision active.
+
+Owner-authorized live file-command probes passed with a valid source query as
+the positive control: wrong launch nonce, stale controller epoch, replay and an
+oversized path payload are rejected; reserved apply/default return result 7
+without changing the observed layout, connection or cache. The first probe
+attempt did not complete its positive control and is not evidence; later scope
+comparison showed a different launch nonce. The successful run refreshed its
+scope and tested delivery first. Private test artifacts remain outside source.
+The app normally owns command sequences; after external diagnostics, start a
+fresh session before checking automatic reconnect queries so diagnostic sequence
+numbers do not interfere with the app's counter.
+
+Normal relaunch/persistence and a controller disconnect/reconnect are pending
+the owner's physical check. Exact VDF-revision acknowledgement is still absent,
+so startup/live apply, restore and rollback remain incomplete. The private
+load-completion callback investigation in CLIENT_LAYOUTS.md is the next lead;
+manifest revisions or a successful generic gamepad run do not close it.
+
+
+### R2 glyph regression: stale native archives; R3 rebuilt from source
+
+The owner reported working input after disconnect/reconnect but PlayStation
+rather than the reference build's Xbox glyphs. The root and reference worktrees
+record identical Wine/FEX/Dock/DXMT submodule commits. Wine sources and
+virtual_ios.c match; generated ignored native archives did not. The linked R2
+app lacks both the current-process write marker and the server HID-owner marker.
+That permits direct physical-pad input and fails to establish delivery through
+Valve's output despite successful engine/output-stream diagnostics. R2 is not
+evidence of end-to-end Steam Input delivery or a distinctive mapping.
+
+Both `build/ntdll-unix/build.sh` and `build/wineserver/build.sh` were rerun from
+this checkout. The full Debug app relink succeeded. Its linked native image now
+contains the local overlay-write fix and HID-owner restriction; xinput1_3/1_4
+forwarding binaries match the reference worktree. The new
+`tools/check-steam-input-runtime.py` rejects the old R2 bundle and passes the
+rebuilt bundle; the IPA packaging path calls it before signing. It supplements,
+not replaces, source/build manifests. Current-process W^X memory-write sanitizer
+tests and pad-output checks pass. The signed `Steam Input M1 R3 · 11-02` build
+was installed without resetting account/prefix data. Overlay delivery, glyphs
+and distinctive bindings still need the R3 game test.
+
+The observed post-relaunch feed has a fresh launch nonce, query sequence/result
+1/1 and the same selected autosave. Its virtual-controller epoch remains 1;
+physical disconnect/reconnect does not by itself prove a virtual-device lease
+transition because Madeira can reserve the virtual slot across it. The owner's
+input report predates the rebuilt native runtime and cannot establish which
+input path the game used.
+
+
+### R3 corrected-route device result (2026-11-02)
+
+The owner confirms working controller input with Xbox glyphs in R3. Its current
+overlay log has nine XInput hook reports and zero WriteProcessMemory failure
+lines. Dock reports successful SDL init, one joystick, configuration-loaded
+callback flag 2 and connected/changing Xbox output. The linked app passes the
+new native-write/HID-owner/XInput-forwarding preflight. This restores the earlier
+verified Steam-to-game route for the tested combination; R2's direct-pad result
+is superseded. All four submodule pins were already identical to the reference
+worktree: stale ignored native archives, not absent source changes, caused the
+regression. The libraries were rebuilt here from source rather than copied.
+
+This does not acknowledge an arbitrary VDF revision or close milestone 1's
+fixture apply/restore/rollback requirements. The read-only service and selection
+migration have device evidence; exact-revision activation remains the next work.
+
+
+## R4 document-revision probe (2026-11-02; device test passed)
+
+Static tracing found the native VDF document `revision` at mapping +0x19c,
+independent of the action-manifest revisions. Callback 1060003 carries that
+revision at payload +24, with completed/controller/App ID at 0/4/8. Creator
+at +16 is never decoded or retained. New bounded decoder/metadata parser and
+their production observer pass ASan/UBSan; the real pinned binary checker now
+checks the corresponding construction/parsing/sender instructions. Unknown
+builds cannot use this decoder. Revision matches remain observations, not active
+service acknowledgements. Startup and diagnostic changes share queue_layout_bytes.
+
+`DOCK_REVISION_PROBE=1 bash build/madeira-dock/build.sh --check` produces the
+opt-in test binary. Action 5 is disabled in ordinary binaries; it can run once
+per launch in the test binary, accepts no path and reads a fixed synthetic
+fixture under controller_base/templates. It requires revision 731, preserves
+baseline bytes and serializes conflicting probes. The fixture is authored here
+(`tests/fixtures/steam-input-revision-probe.vdf`), face buttons only, A/B swapped.
+It never writes a Steam selection. On a matching completion it observes for
+30 seconds then queues the baseline; no initial completion triggers restoration
+after 15 seconds; a restoration observation timeout is explicitly reported.
+No general apply/default command has been enabled. Check the original selected
+file's bytes after the test; native-client persistence must not be assumed.
+
+Both normal and diagnostic lifecycles pass sanitizer tests (including incorrect
+build/app/controller, malformed callbacks, mismatched revisions, overlap,
+restoration/timeout/cleanup and normal-build rejection). Swift regressions,
+x64/x86 ordinary cross-builds, January binary checks, full Debug app build and
+native capability preflight pass. Signed `Steam Input M1 R4 · 11-02` is installed,
+and its scratch fixture was uploaded only after confirming the name unused.
+The diagnostic host is 70,144 bytes, SHA-256
+`66494cda02e2651e1aff7a6577ba01b19f8f8cabcb7d1373f5236114cd02b291`;
+the bundled copy matches. No game/account source file was modified.
+
+The first device run observed matching completions and restoration but the owner
+was not watching the buttons. A fresh-session retry completed successfully: the
+owner explicitly confirmed A/B actions swapped and then restored. Private load
+completions reported revision 731 then baseline revision 0, probe phase reached
+4, and a before/after byte comparison confirmed the original selected VDF was
+unchanged. This is evidence for the serialized diagnostic queue/restore path,
+not general callback ordering or safe concurrent transactions. Production work
+must associate unique revisions with immutable content and cover held outputs,
+late callbacks, persistence, default restoration and failure rollback.
+Milestone 1 is not complete until the verified contract is used for ordinary
+revision application, persistence, default restoration and rollback.
+
+
+## R5 revision-tagged queue copies (2026-11-02; device validation passed)
+
+`sh_input_vdf_materialize` uses the bounded metadata reader to locate the exact
+root revision token, replaces it in a private output buffer or inserts metadata
+after the root opening brace, and preserves all remaining bytes verbatim. It
+rejects malformed/ambiguous metadata, overlap, out-of-range revisions and output
+size overflow without modifying output on failure. This is not a general binding
+validator. The source is never written and nested revision keys are untouched.
+
+The opt-in one-shot probe prepares both apply and restoration copies before
+queuing either. Revisions are max(baseline, authored fixture revision) +1 and +2;
+insufficient range fails closed. It retains exact source bytes separately and
+accepts only the new restoration revision, so a delayed baseline/startup
+completion cannot acknowledge restoration. Session one-shot gating prevents
+reuse within this experiment. Production needs persistent allocation, immutable
+content/hash association, held-output handling and transaction recovery; normal
+apply/default commands are still disabled. The original R4 device result remains
+valid for its earlier code, but these new submitted bytes need a fresh device
+swap/restore check before claiming native acceptance (result below).
+
+Validation: normal and opt-in ASan/UBSan lifecycles pass, including a delayed
+startup completion during restoration and revision exhaustion. Materialization
+tests cover unknown/nested binding preservation, insertion, malformed/duplicate
+and noncanonical-case revision metadata, output bounds and overlap rejection.
+C/Swift interoperability and selection persistence regressions pass; x64/i386
+ordinary builds, pinned binary evidence checks, Debug iOS build, runtime
+capability preflight, signing verification and privacy/diff checks pass. R5 is
+built, signed and installed after the owner closed the running game. The bundled
+host is 71,680 bytes, SHA-256
+`4e0b990c687da1f0c31e380b3b30bb00326e5a4c9fd938c2e5beffe569adfb22`.
+Fresh-session device test passed: the owner explicitly confirmed the live A/B
+swap followed by restoration. Completed callbacks reported apply revision 732
+then restoration revision 733, probe phase reached 4, command result was OK,
+and a before/after byte comparison confirmed the original selected VDF unchanged.
+This verifies native acceptance and live behavior of the revision-tagged copies.
+Production transaction/content-hash binding, persistent allocation and ordinary
+apply/default remain outstanding; this does not complete Milestone 1.
+
+
+## Transaction and persistent preparation (2026-11-02; host implementation)
+
+Added the portable `sh_input_tx_*` coordinator to steam_input_service. It reserves
+separate apply/rollback revisions, consumes cancelled reservations, rejects
+concurrent/stale requests and native signed-range exhaustion, and binds immutable
+queue digests once. Confirmation requires both a matching completed callback and
+an activation request before the deadline, in either arrival order. Timeout or
+explicit failure returns one rollback-submission instruction; a failed rollback
+blocks further work until connection recovery and never labels the historical
+working receipt current. Reconnect preserves revision/sequence high-water marks
+and invalidates old completions. Native callers still must validate actual bytes,
+synchronize the reserved floor/journal and submit both copies; v1 apply/default
+remain disabled and do not yet invoke the coordinator.
+
+Madeira now compiles this portable C implementation for iOS too, through its
+bridging header. `SteamInputTransactions.swift` uses that same metadata parser
+and materializer. Its account/game/controller journal atomically writes and
+synchronizes reservations under a nonblocking writer lock, stores exact source
+and baseline bytes alongside tagged apply/rollback copies by SHA-256, and verifies
+hashes on read. Preparation checks each tagged copy against the shared native
+materializer and its reserved revision before binding content. A queued request
+records the launch nonce, epoch and sequence; a receipt must match that scope,
+reservation UUID, native revision and digest. Interrupted work cannot accept a
+late successful receipt from the old launch. Unknown/corrupt records and objects
+are preserved and fail closed; reservations never wrap or get reused.
+
+The app service has local preparation for explicit template/personal requests,
+which updates requested selection only after content preparation and preserves
+lastActivated. It sends no apply command. Launch/end/reconnect mark unfinished
+work interrupted and expose a recovery requirement rather than automatically
+resuming it. The next work is the session-scoped native submission/receipt bridge,
+startup reapplication and held-output/failure recovery. No replacement device
+build has been installed; R5 remains the last device-validated runtime.
+
+Validation: Dock normal/probe ASan/UBSan suites pass, including the new transaction
+failure/ordering/reconnect/exhaustion scenarios. Swift journal tests use real
+files and locks, simulate interruption/reload, verify original and tagged bytes,
+reject corrupt records/objects and stale launch receipts, and round-trip a real
+C coordinator receipt into the Swift journal. Service tests cover explicit local
+preparation without a native mutation, unchanged lastActivated, overlap rejection
+and interruption on reconnect/launch. Existing selection and C/Swift wire tests
+pass. Normal x64/i386 Dock cross-builds, full Debug iOS build with the shared C
+source, runtime capability check and privacy/diff checks pass. No additional iPad
+test was requested for this preparation-only step; the live bridge is not enabled.
+
+
+## Local native submission/receipt bridge (2026-11-02; native endpoint device-validated)
+
+`DOCK_LOCAL_APPLY=1` builds an explicitly gated local action-3 endpoint; default
+builds continue returning ACK unavailable, and default restoration remains
+reserved. The README specifies the MSITXN02 payload and MSITXFD2 receipt. Native
+preflight requires the pinned completion ABI, connected/settled working layout,
+matching scope/sequence and fresh document revisions. CryptoAPI verifies both
+queue SHA-256 digests; the supplied rollback must exactly equal the metadata-tagged
+working bytes. Both heap-owned copies and a copied coordinator state are prepared
+before native mutation; failed validation leaves the current layout unchanged.
+The startup/diagnostic/live paths share queue_layout_bytes, which retains the
+latest submitted bytes for verified rollback. Local activation waits for its
+matching load completion instead of accepting a generic cache hit. Timeout queues
+rollback once; restore failure marks working state unknown. A virtual connection
+change cancels observation; new live work remains unavailable until session
+recovery. Physical reconnect with a reserved virtual pad is still a separate
+transport issue. Cleanup frees retained copies, disables polling and removes
+transient files. Receipt publication retries at 500 ms intervals.
+
+Swift submitPrepared journals the launch/epoch/sequence before installing payload
+and command. It distinguishes acceptance from the transaction receipt, validates
+all scope/revision/hash fields before updating requested selection's lastActivated,
+leaves that history unchanged on rollback/rejection, and interrupts ambiguous
+write/timeout/connection cases. Query sequence allocation now adopts the server's
+high-water sequence, so an external diagnostic cannot strand future queries.
+Wrong-scope/hash receipts cannot even be exposed as a confirmed service receipt.
+
+Host coverage: bounded/truncated/malformed payloads and feeds; ordinary-build
+rejection; gated lifecycle digest and baseline rejection; overlap; completion
+before activation; successful apply; timeout rollback and stale callbacks; failed
+rollback and cleanup. The CryptoAPI call boundary is mocked in host lifecycle
+tests; the actual Windows implementation is cross-built. Swift tests submit real
+SHA-256 queue payloads, feed them to C, obtain a C-generated confirmed receipt,
+reject wrong nonce/game/epoch/sequence/revision/hash and persist only the valid
+acknowledgement. Final normal/probe/local ASan/UBSan suites, C/Swift service,
+journal/selection regressions, ordinary x64/i386 and gated x64 builds, pinned
+client checks, full iOS Debug build, native capability preflight, signing and
+privacy/diff checks pass. Cleanup also disables polling, and retained working
+bytes can safely be requeued without freeing an aliased source before native
+consumption. Late startup diagnostics cannot invalidate a confirmed transaction
+receipt used as the next rollback baseline.
+
+`Steam Input M1 R6 · 11-02` is built, signed and installed on the connected
+iPad. The app label, bundled host digest, signature and native capability
+preflight were verified before installation. The bundled host is 76,288 bytes, SHA-256
+`105736d12a7057790c41ee204ccbba979ed14fdd460563e4d05e54a958314e56`.
+This build enables only the gated local endpoint, not the old action-5 probe.
+The native endpoint device experiment passed. A scoped action-3 command applied
+the distinctive fixture, returned confirmed phase 3 for revision 732 and the
+expected exact SHA-256 digest. After the observation window a separate action-3
+command restored the original mapping with revision 734 and its expected digest.
+The owner explicitly confirmed the live swap and restoration. A before/after
+comparison confirmed the selected source VDF byte-for-byte unchanged.
+
+This external sender exercised actual CryptoAPI digest checks, native baseline
+validation, separate serialized applies and exact transaction receipts. It did
+not exercise automatic failure rollback, held outputs, app-side journal writes
+or reapplication after restart. Swift persistence still has host coverage only;
+ordinary builds remain gated until the remaining integration/recovery work is
+validated. Milestone 1 is incomplete.
+
+
+## App-side persistence/restart (R7 preparation, 2026-11-02)
+
+The gated host advertises working-snapshot capability 32 and publishes bounded
+MSIBAS02 baseline frames after exact completion/activation settle. Queueing,
+refocus and virtual lease changes invalidate the old frame. Frames retain exact
+native bytes and private scope; no metadata is logged. Polling/publication is
+bounded to 500 ms, and cleanup removes baseline files. The portable shared codec
+checks exact length, nonce presence, App ID, slot, epoch and native revision.
+
+Swift waits for the new nonce-bound baseline after its query. It proves cached
+source bytes reproduce a prior confirmed queue, then reuses normal journal,
+preparation, submission and receipt handling for restart. The historical ACK is
+not current active state until the new receipt arrives. Newer unconfirmed intent
+and its generation are preserved while the last confirmed choice is reapplied.
+Up to eight exact confirmed-source proofs survive later failed restart rollback
+to Steam's baseline; validated legacy working receipts are retained before new
+reservations overwrite pending metadata. Interrupted old-launch requests are
+retired without replay only after the new native baseline; same-nonce retirement
+is rejected. Virtual lease changes within a launch suppress automatic recovery.
+
+A successful explicit clear increments intent generation, keeps historical ACK
+and delegates future startup to Steam's existing selection. The Debug-only
+`madeira-steam-input-local-test.bin` mailbox accepts scoped 44-byte commands
+using the query command framing: action 1 selects only the fixed authored test
+fixture and requires no existing explicit request; action 2 restores the baseline
+captured by the fixture/restart transaction, then clears the test override only
+after its confirmed receipt. It accepts no paths and rejects old nonce/epoch or
+replayed diagnostic sequences. It is omitted in Release builds and needs both
+local-apply and snapshot capabilities. This allows actual app journal/persistence
+validation before a layout UI exists. Normal startup/apply APIs are the path
+under test; the external tool only triggers the scoped debug mailbox.
+
+Host tests cover native snapshot framing, settlement/invalidation/cleanup;
+confirmed-source proof and rollback history; a fresh app launch preserving a newer
+unconfirmed request while reapplying the old confirmed source; wrong-scope
+baseline rejection; same-launch recovery rejection; and a full Debug mailbox
+fixture selection, receipt persistence, relaunch reapplication, baseline restore
+and cleared-override relaunch. Device validation of those paths is pending. R6's
+native endpoint evidence remains valid for that earlier build; it does not
+establish R7 app-side persistence or held-output/failure recovery.
+
+The first observed Steam baseline is also stored separately before an explicit
+override; fresh-launch transactional baselines never overwrite that restoration
+source. This prevents a later native baseline change from redirecting diagnostic
+cleanup. After its successful restore receipt the test clears explicit intent,
+retains historical ACK, and a subsequent launch issues no override. Host coverage
+includes a deliberately changed fresh native baseline to verify that distinction.
+
+Validation: final normal/probe/local ASan/UBSan suites, shared codec and Debug app
+service/journal/selection regressions pass. Ordinary x64/i386 and gated x64 native
+builds, pinned-client checks, full Debug iOS build, native capability preflight,
+privacy/diff checks and signing verification pass. R7 is installed and its
+app-side persistence/relaunch result is recorded below.
+
+Signed label: `Steam Input M1 R7 · 11-02`. Bundled gated host: 77,824 bytes,
+SHA-256 `226ad2b7d2f2c16bb1f5b653556c2aab21c8223fcb1c8bac68fd69c6be84121c`.
+R7 is installed; the existing device fixture matches the authored source exactly.
+The owner has authorized future test-build installation without waiting for game
+closure. No further close-game coordination is required before installs.
+
+Device test passed for the actual app path: the scoped Debug trigger caused the
+app to prepare, journal, submit and persist fixture acknowledgement at revision
+732 (native sequence 2). After normal game end/relaunch, no external apply command
+was sent: the app automatically reapplied it at revision 734, native sequence 2
+in a fresh launch nonce. The owner confirmed buttons remained swapped. The app's
+restore trigger then submitted the captured original baseline at revision 736,
+native sequence 3, persisted its receipt and cleared explicit intent. The owner
+confirmed normal button behavior returned. Native receipt digests, journal source
+identity and persisted selection matched; the original selected VDF was
+byte-for-byte unchanged across the test/relaunch. A final cleared-intent relaunch
+and fault/reconnect/held-output cases remain unverified. Milestone 1 is incomplete.
+
+The final R7 cleared-intent relaunch also passed on device. A fresh nonce, native
+state activation-requested and sequence/result 1/1 established query-only startup;
+the journal retained the previous launch's restore receipt rather than adding a
+new transaction. Explicit intent remained nil, the exported native baseline
+exactly matched the pre-test original VDF, and the original selected source was
+unchanged. The owner confirmed buttons remained normal. Persistence, relaunch,
+restoration and override cleanup are device-validated; fault/reconnect and
+held-output behavior remain outstanding before ordinary-build enablement.

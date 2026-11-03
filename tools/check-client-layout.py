@@ -168,3 +168,20 @@ if any(rvas[48:50]):
 if rvas[50]:
     assert names_method(rvas[50], 'HasGameMapping', 0x35c300c2)
     print('PASS: controller slot 128 (parsed app mapping cache)')
+
+
+# January private load-result observation. These checks establish the 32-byte
+# payload's native revision field without enabling any new client method.
+if block[1] == '202601':
+    table = vtable('CLoadControllerConfigWorkItem')
+    assert struct.unpack_from('<Q', image, table + 2 * 8)[0] - base == 0x5ccbe0
+    assert image[0x5cce40:0x5cce44] == bytes.fromhex('c6435001')  # completed
+    assert image[0x5cce4b:0x5cce54] == bytes.fromhex('4c8d4350baa32c1000')
+    assert image[0x5cce5c:0x5cce62] == bytes.fromhex('41b920000000')  # 32 bytes
+    assert image[0x5b78f6:0x5b78fd] == bytes.fromhex('40886950895154')  # completed=0, index
+    assert image[0x5b7909:0x5b7921] == bytes.fromhex(
+        '894158498b807001000048894160418b809c010000894168')  # app, skipped creator, revision
+    assert image[0x62df09:0x62df10] == bytes.fromhex('4189879c010000')
+    assert image[0x123d548:0x123d551] == b'revision\0'
+    assert image[0x633cfe:0x633d05] == bytes.fromhex('41ff859c010000')  # writer increments revision
+    print('PASS: January private load-result payload size, controller/app/document-revision origins and VDF revision field')

@@ -206,6 +206,144 @@ A personal layout already cached under Steam's folder is retained; Dock does
 not replace an unavailable Workshop selection with a template. Unsupported
 client builds have no Steam Input adapter. See `docs/CLIENT_LAYOUTS.md`.
 
+The launch loop also observes Valve's public configuration-loaded notification
+(callback 2803). Only bounded counts, manifest revisions and output-type flags
+are logged; creator and device identities are not logged. A configuration-load
+notification does not acknowledge the exact selected layout bytes.
+
+### Layout query service (version 1)
+
+Madeira supplies `MADEIRA_DOCK_INPUT_SESSION`, a fresh nonzero 32-character
+lowercase hex launch identifier. With it, Dock writes an atomic
+`C:\madeira-steam-input.bin` feed and consumes
+`C:\madeira-steam-input-cmd.bin` at most twice a second. Files are cleared at
+service start/end. Selection keys and Workshop IDs stay in the local feed,
+never the numeric report. Existing authentication and client pin gates still
+apply. Version 1 queries the selection and reports available source types;
+only an existing Steam selection is currently advertised. Apply/reset are
+reserved operations returning `7` (active-revision acknowledgement unavailable)
+without changing any layout. There is no path field or VDF payload.
+
+All integers are unsigned little endian. A command is exactly 44 bytes:
+`MSICMD01` (8), launch identifier (16), App ID (4), controller index (4),
+connection epoch (4), sequence (4), action (4). Actions are query=1, sources=2,
+apply=3, restore default=4. Only controller 0 is supported. The epoch changes
+on each observed connect/disconnect; this is an indexed virtual-controller lease,
+not physical-device identity. Zero, repeated or older sequences, wrong launches,
+games, controllers and epochs are ignored without consuming a sequence. An
+unknown action or malformed/oversized command does not execute. Commands are
+atomically moved to a processing file before reading, so consumption cannot
+delete a newly installed command.
+
+A feed is `MSIFEED1` (8), launch identifier (16), App ID (4), controller index
+(4), epoch (4), last accepted sequence (4), result (4), state (4), source mask
+(4), flags (4), Workshop ID (8), forwarded-input mask (4), key byte length (4),
+then that many UTF-8 key bytes (at most 4096). The fixed header is 72 bytes.
+Results: 0 no command yet, 1 query completed or apply accepted, 2 stale (reserved), 3 unsupported,
+4 adapter unavailable, 5 controller absent, 6 invalid client selection, 7 active
+revision acknowledgement unavailable, 8 transaction busy. State: 0 idle,
+1 disconnected, 2 queued, 3 cached, 4 activation requested, 5 failed, 6 active
+in the gated local transaction path. Source bit 0 means an existing Steam
+selection. Flag bits mean adapter available (1), controller connected (2),
+generic game cache observed (4), generic fallback selected by Dock this session
+(8), gated local-apply capability (16), scoped working snapshot (32). Cache presence and activation requests
+never prove an active revision.
+A fallback must not be migrated as a pre-existing Steam choice.
+
+January builds also observe private load-result callback 1060003. The reader
+filters the controller and App ID and reports a completed flag and document
+revision; creator identity is skipped. The metadata-only VDF reader preserves
+the original bytes, rejects ambiguous revision keys and bounds size, nesting,
+token count and token length. A matching document revision is diagnostic
+correlation, not an enabled active-content acknowledgement.
+
+The portable transaction coordinator in `steam_input_service` is preparation
+infrastructure for the layout service, separate from the version-1 wire command
+handler. It serializes apply/rollback reservations above a revision floor and
+binds immutable queue digests before submission. A matching completed callback
+and the corresponding activation request are both required to confirm a
+receipt. Timeout or explicit failure initiates one rollback; a rollback failure
+retains historical receipt bytes but marks the working state unknown. Late,
+stale, wrong-game/controller and expired completions cannot confirm work.
+Connection changes invalidate pending observations without recycling revisions.
+The caller must durably reserve revisions and validate/hash both queue copies
+before native submission. Ordinary builds reject apply/default. An explicitly
+compiled local-apply build uses this coordinator for action 3, as below.
+
+### Gated local submission and receipts
+
+`DOCK_LOCAL_APPLY=1` in Madeira's Dock builder enables local action 3 and flag 16
+only on the validated January client. Default builds leave it disabled. Action 4
+(Game default) remains reserved. The local endpoint consumes one atomically
+claimed `C:\madeira-steam-input-apply.bin`; commands and payloads must have the
+same launch nonce, App ID, slot 0, connection epoch and sequence. It refuses busy,
+unsettled or unknown working state and cannot overlap the one-shot probe.
+
+The `MSITXN02` envelope has a 120-byte LE header: magic (8), nonce (16), App ID,
+controller, epoch, sequence, apply revision, rollback revision (4 each), two
+SHA-256 digests (32 each), and two byte lengths (4 each), followed by apply and
+rollback VDF bytes. Each document is nonempty and below 1 MiB, with no NUL;
+metadata revisions must match the header and reserve adjacent, non-reused native
+numbers. No filenames/paths are accepted. Dock verifies both cryptographic hashes
+and compares rollback bytes against a revision-tagged copy of the working layout
+before changing anything. Acceptance is not activation. A matching private load
+completion must precede activation; failure/timeout queues the prebuilt working
+rollback copy once. Failed rollback leaves the working state unknown.
+
+The atomically published `C:\madeira-steam-input-tx.bin` is exactly 96 bytes:
+`MSITXFD2` (8), nonce (16), App ID, controller, epoch, transaction sequence, phase,
+revision high-water, apply revision, rollback revision, working revision (4 each),
+working SHA-256 (32), working-known (4, 0/1). Phases are idle 0, prepared 1,
+applying 2, confirmed 3, rolling back 4, rolled back 5, failed 6, cancelled 7.
+Historical working bytes are not current when working-known is zero. Publication
+retries at most twice per second and all transient files are removed on cleanup.
+The app journals before submission, validates the full receipt scope and content,
+and only then persists a successful requested selection. Reconnect/end interrupt
+unacknowledged work. The app can use the working snapshot below to prepare startup reapplication
+through this same endpoint. It remains gated for device validation of app-side
+persistence/restart and held-output recovery.
+
+### Working snapshot for restart
+
+The gated host advertises flag 32 and atomically publishes
+`C:\madeira-steam-input-baseline.bin` only for settled working bytes. Its bounded
+`MSIBAS02` frame is magic (8), nonce (16), App ID, controller 0, connection epoch,
+native revision, byte length (4 each), then the exact VDF bytes, below 1 MiB. The
+44-byte header carries no filenames. Callers verify scope, exact framing and
+native metadata revision and hash the bytes themselves. These private layout
+bytes can contain native metadata and must never be logged. Queueing, refocus or
+connection changes invalidate the old file; cleanup removes it. Publication is
+bounded to twice per second. A snapshot is neither a new source recommendation
+nor permission to replay an unacknowledged old request.
+
+An explicitly compiled diagnostic (`DOCK_REVISION_PROBE=1` in Madeira's Dock
+builder) accepts action 5 once per launch. Ordinary builds return 7 for this
+action. The diagnostic reads only the fixed
+`controller_base/templates/madeira_m1_revision_probe.vdf` fixture, requires its
+authored revision 731, retains the original bytes, and prepares private queue
+copies for both directions. Each copy gets a distinct document revision above
+both source revisions; exhaustion fails before queuing. Only the root revision
+token is replaced (or inserted when absent), preserving all other bytes. It
+queues through the same path used at startup. It does not call Steam's
+selection setter. A matching private completion starts a 30-second observation
+window, then the revision-tagged baseline copy is queued. A delayed startup
+completion cannot acknowledge that restoration. A missing initial completion
+also starts restoration after 15 seconds; a missing restoration completion
+reports failure after another 15 seconds. Report `steam-input-probe-phase` is
+1 applying, 2 matching revision observed, 3 restoring, 4 restoration-copy
+revision observed, 5 restore observation timed out. These are experimental phases, not
+production apply/restore results. The synthetic fixture provides face buttons
+only, with A/B reversed, and contains no keyboard/mouse outputs. It requires
+a deliberate menu-based device test and unchanged-original-file check when
+validating a new supported client. Production layout-service acknowledgement
+still requires transaction/content association beyond this diagnostic.
+
+Forwarded-input bits describe the Madeira transport: ordinary buttons/D-pad (1),
+two sticks (2), analog triggers (4), Sony touchpad click when supplied by the
+physical pad (8). The transport does not currently forward motion, touch
+coordinates, rear buttons or the extra Deck/Steam Controller touch inputs.
+This mask does not assert that every physical controller supplies all groups.
+
 ## Extra launch arguments
 
 `MADEIRA_STEAM_HOST_ARGUMENTS` adds bounded UTF-8 arguments to Valve's own

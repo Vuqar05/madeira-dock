@@ -4,12 +4,33 @@
 #ifndef MADEIRA_DOCK_STEAM_INPUT_H
 #define MADEIRA_DOCK_STEAM_INPUT_H
 #include "session.h"
+#include "steam_input_service.h"
 
 /* Steam Input during a launched game. Only with MADEIRA_DOCK_STEAM_INPUT=1.
  * When unavailable (unpinned client build, a method mismatch) it reports
  * steam-input-available=0 and does nothing else; the launch is never
- * affected. Reports numbers only. */
+ * affected. Logs numbers only; the optional session-bound local query feed
+ * contains the selection key and Workshop identity (never logged). */
 struct sh_steam_input {
+    struct sh_input_service service;
+    struct sh_input_transaction transaction;
+    bool transaction_dirty, baseline_dirty;
+    uint64_t next_transaction_ms, next_baseline_ms;
+    char *current_layout, *transaction_apply, *transaction_rollback;
+    uint64_t next_service_ms;
+    bool service_dirty;
+    bool load_result_supported, layout_revision_known;
+    uint32_t layout_revision;
+    unsigned probe_phase;
+    bool probe_used;
+    uint64_t probe_deadline_ms;
+    char *probe_original; /* diagnostic only; exact baseline bytes, never a Steam selection write */
+    char *probe_restore; /* private revision-tagged copy; original stays untouched */
+    uint32_t probe_revision, probe_original_revision;
+    unsigned load_result_events;
+    struct sh_input_load_result load_result; /* no creator identity */
+    unsigned configuration_events;
+    struct sh_input_configuration configuration; /* device handle remains private */
     void *controller; /* IClientControllerSerialized, or NULL */
     const struct sh_observer *o;
     uint64_t next_poll_ms, next_sdl_ms;
@@ -54,5 +75,7 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
 void sh_steam_input_start(struct sh_steam_input *s);
 /* Call from the launch loop. */
 void sh_steam_input_poll(struct sh_steam_input *s);
+/* Observe the public configuration-loaded callback; never an exact-revision ACK. */
+void sh_steam_input_callback(struct sh_steam_input *s, int32_t id, const void *data, int32_t size);
 void sh_steam_input_end(struct sh_steam_input *s);
 #endif

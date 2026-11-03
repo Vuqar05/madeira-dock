@@ -11,12 +11,17 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(_WIN32) && defined(_WIN64)
+#include <wincrypt.h>
+#endif
+
 /* One question, this long after the launch: on device a poll once a second
  * coincided with the game's audio breaking up (docs/STEAM_INPUT.md), so the
  * probe asks once to tell the first call from the polling. */
 #define SH_STEAM_INPUT_DELAY_MS 15000
 
 #ifdef _WIN64
+typedef bool (__thiscall *get_config_fn)(void *, uint32_t, const char *, uint64_t *, void *);
 typedef void *(__thiscall *get_controller_fn)(void *, int32_t);
 typedef int32_t (__thiscall *connected_fn)(void *);
 typedef void (__thiscall *ps_changed_fn)(void *, bool);
@@ -113,6 +118,9 @@ static char *read_layout(const struct sh_steam_input *s, const char *selection)
         text = NULL;
     }
     CloseHandle(file);
+    if (text && memchr(text, 0, size)) {
+        HeapFree(GetProcessHeap(), 0, text); text = NULL;
+    }
     if (text) text[size] = 0;
     return text;
 }
@@ -157,6 +165,7 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
 {
     memset(s, 0, sizeof *s);
     s->o = o;
+    s->gameid = appid;
     s->last_count = -1;
     s->output_reserved = s->output_connected = -1;
     if (!enabled()) return;
@@ -180,6 +189,7 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
         return;
     }
     s->controller = controller;
+    s->load_result_supported = layout->revision == 202601;
     o->event("steam-input-available", 1);
     s->gameid = appid; /* CGameID of a Steam app: the app ID, type 0 */
     s->account_id = (uint32_t)steamid; /* local autosave directory; never reported */
@@ -222,9 +232,109 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
     settings_changed(s);
 }
 
+/* Separate atomic feed/command files follow the Friends transport, but carry
+ * a per-launch nonce and an observed controller-connection lease. Names and
+ * selection keys never enter the numeric report. Version 1 is read-only. */
+static const wchar_t input_feed[] = L"C:\\madeira-steam-input.bin";
+static const wchar_t input_temp[] = L"C:\\madeira-steam-input.tmp";
+static const wchar_t input_claim[] = L"C:\\madeira-steam-input-processing.bin";
+static const wchar_t input_command[] = L"C:\\madeira-steam-input-cmd.bin";
+
+static void publish_service(struct sh_steam_input *s)
+{
+    uint8_t data[SH_INPUT_FEED_CAP];
+    size_t size = sh_input_service_feed(&s->service, data, sizeof data);
+    if (!size) return;
+    HANDLE file = CreateFileW(input_temp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    DWORD wrote = 0;
+    bool ok = WriteFile(file, data, (DWORD)size, &wrote, NULL) && wrote == size;
+    CloseHandle(file);
+    if (ok) ok = MoveFileExW(input_temp, input_feed, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (!ok) DeleteFileW(input_temp);
+    else s->service_dirty = false;
+}
+
+static void start_service(struct sh_steam_input *s)
+{
+    wchar_t wide[34]; char hex[33];
+    DWORD n = GetEnvironmentVariableW(L"MADEIRA_DOCK_INPUT_SESSION", wide, 34);
+    if (n != 32) return;
+    for (unsigned i = 0; i < 32; ++i) {
+        if (wide[i] > 127) return;
+        hex[i] = (char)wide[i];
+    }
+    hex[32] = 0;
+    if (!sh_input_session_parse(hex, s->service.session)) return;
+    s->service.enabled = true;
+    s->service.available = s->controller != NULL;
+    s->service.appid = (uint32_t)s->gameid;
+    s->service.state = SH_INPUT_DISCONNECTED;
+#if defined(SH_STEAM_INPUT_LOCAL_APPLY) && SH_STEAM_INPUT_LOCAL_APPLY
+    s->service.local_apply = s->load_result_supported;
+    s->service.working_snapshot = s->service.local_apply;
+#endif
+    DeleteFileW(L"C:\\madeira-steam-input-baseline.bin"); DeleteFileW(L"C:\\madeira-steam-input-baseline.tmp");
+    DeleteFileW(L"C:\\madeira-steam-input-tx.bin"); DeleteFileW(L"C:\\madeira-steam-input-tx.tmp");
+    DeleteFileW(L"C:\\madeira-steam-input-apply.bin"); DeleteFileW(L"C:\\madeira-steam-input-apply-processing.bin");
+    s->service_dirty = true;
+    DeleteFileW(input_feed); DeleteFileW(input_temp); DeleteFileW(input_command); DeleteFileW(input_claim);
+    publish_service(s);
+}
+
+static bool start_revision_probe(struct sh_steam_input *s);
+static uint32_t start_local_apply(struct sh_steam_input *s, const struct sh_input_command *command);
+static void poll_local_apply(struct sh_steam_input *s, uint64_t now);
+
+
+static void poll_service(struct sh_steam_input *s, uint64_t now)
+{
+    if (!s->service.enabled || now < s->next_service_ms) return;
+    s->next_service_ms = now + 500;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    if (MoveFileExW(input_command, input_claim, MOVEFILE_REPLACE_EXISTING))
+        file = CreateFileW(input_claim, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        uint8_t data[SH_INPUT_COMMAND_SIZE + 1]; DWORD got = 0;
+        bool read = ReadFile(file, data, sizeof data, &got, NULL);
+        /* Claim before reading, so consuming this command cannot delete a
+         * newly atomically installed command. */
+        CloseHandle(file);
+        DeleteFileW(input_claim);
+        struct sh_input_command command;
+        if (read && sh_input_command_parse(data, got, &command)) {
+            uint32_t result = sh_input_service_accept(&s->service, &command);
+            if (result != SH_INPUT_STALE) {
+                if (result == SH_INPUT_ACK_UNAVAILABLE && command.action == SH_INPUT_APPLY)
+                    s->service.result = start_local_apply(s, &command);
+                if (result == SH_INPUT_ACK_UNAVAILABLE && command.action == SH_INPUT_REVISION_PROBE)
+                    s->service.result = start_revision_probe(s) ? SH_INPUT_OK : SH_INPUT_ACK_UNAVAILABLE;
+                if (result == SH_INPUT_OK) {
+                    char app[16]; snprintf(app, sizeof app, "%u", (uint32_t)s->gameid);
+                    s->selected_workshop = 0;
+                    bool selected = ((get_config_fn)CONTROLLER(s, 124))(s->controller, 0, app,
+                                                       &s->selected_workshop, &s->selected_url);
+                    const char *key = selected ? s->selected_url.text : NULL;
+                    size_t length = 0;
+                    if (key) while (length <= SH_INPUT_KEY_CAP && key[length]) ++length;
+                    if (length > SH_INPUT_KEY_CAP) s->service.result = SH_INPUT_BAD_COMMAND;
+                    else {
+                        if (length) memcpy(s->service.selection, key, length);
+                        s->service.selection[length] = 0;
+                        s->service.workshop = selected ? s->selected_workshop : 0;
+                    }
+                }
+                s->service_dirty = true;
+            }
+        }
+    }
+    if (s->service_dirty) publish_service(s);
+}
+
 void sh_steam_input_start(struct sh_steam_input *s)
 {
     s->next_poll_ms = s->o->now_ms() + SH_STEAM_INPUT_DELAY_MS;
+    start_service(s);
 }
 
 /* The client builds its PlayStation (and other non-Steam) controllers from
@@ -278,12 +388,15 @@ static void report_focus(struct sh_steam_input *s)
     uint64_t focused = 0;
     ((get_focused_fn)(*(void ***)s->utils)[101])(s->utils, &focused);
     s->o->event("steam-input-focused-app", (int32_t)(focused & 0xffffff));
-    if (s->layout_queued && !s->activate_at_ms) s->activate_at_ms = s->o->now_ms() + 250;
+    if (s->layout_queued && !s->activate_at_ms) {
+        s->activate_at_ms = s->o->now_ms() + 250;
+        s->baseline_dirty = true;
+        DeleteFileW(L"C:\\madeira-steam-input-baseline.bin");
+    }
 }
 
 typedef bool (__thiscall *is_connected_fn)(void *, uint32_t, bool);
 typedef bool (__thiscall *has_mapping_fn)(void *, uint32_t);
-typedef bool (__thiscall *get_config_fn)(void *, uint32_t, const char *, uint64_t *, void *);
 
 /* Observe only; never create or write Steam's stream. January's
  * CXInputSteamMemStream (0xa48340) maps 0x3e78 bytes with masks at 0/4
@@ -324,6 +437,253 @@ static void observe_output(struct sh_steam_input *s)
  * the game window already exists, and a pad can reconnect with the same PID.
  * Query the cheap indexed status, not GetNumConnectedControllers (on device
  * that enumeration interrupted audio). Requeue only on connection or failure. */
+static void queue_layout_bytes(struct sh_steam_input *s, const char *vdf)
+{
+    size_t length = strlen(vdf);
+    char *copy = HeapAlloc(GetProcessHeap(), 0, length + 1);
+    if (copy) memcpy(copy, vdf, length + 1);
+    DeleteFileW(L"C:\\madeira-steam-input-baseline.bin");
+    s->baseline_dirty = true;
+    char *previous = s->current_layout;
+    s->current_layout = copy;
+    s->layout_revision_known = sh_input_vdf_revision(vdf, strlen(vdf), &s->layout_revision);
+    s->o->event("steam-input-layout-revision-known", s->layout_revision_known ? 1 : 0);
+    if (s->layout_revision_known) s->o->event("steam-input-layout-revision", (int32_t)s->layout_revision);
+    struct sh_config_info info = {1, 0, -1, 0x140, -1, 0, 1};
+    ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, 0, &info);
+    if (previous) HeapFree(GetProcessHeap(), 0, previous);
+    s->cache_waits = 0;
+    s->layout_queued = true;
+    s->service.mapping_cached = false;
+    s->service.state = SH_INPUT_QUEUED; s->service_dirty = true;
+    s->activate_at_ms = s->o->now_ms() + 3000;
+    s->o->event("steam-input-layout-queued", 1); /* void API; not proof of adoption */
+}
+
+#if defined(SH_STEAM_INPUT_LOCAL_APPLY) && SH_STEAM_INPUT_LOCAL_APPLY
+#ifndef SH_INPUT_VERIFY_HASH
+static bool verify_layout_hash(const char *data, size_t size, const uint8_t expected[32])
+{
+    HCRYPTPROV provider = 0; HCRYPTHASH hash = 0;
+    uint8_t actual[32]; DWORD length = sizeof actual;
+    bool ok = CryptAcquireContextW(&provider, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) &&
+        CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash) &&
+        CryptHashData(hash, (const BYTE *)data, (DWORD)size, 0) &&
+        CryptGetHashParam(hash, HP_HASHVAL, actual, &length, 0) && length == sizeof actual &&
+        !memcmp(actual, expected, sizeof actual);
+    if (hash) CryptDestroyHash(hash);
+    if (provider) CryptReleaseContext(provider, 0);
+    return ok;
+}
+#define SH_INPUT_VERIFY_HASH verify_layout_hash
+#endif
+static char *copy_layout_span(const char *data, size_t size)
+{
+    char *copy = HeapAlloc(GetProcessHeap(), 0, size + 1);
+    if (copy) { memcpy(copy, data, size); copy[size] = 0; }
+    return copy;
+}
+#endif
+static uint32_t start_local_apply(struct sh_steam_input *s, const struct sh_input_command *command)
+{
+#if !defined(SH_STEAM_INPUT_LOCAL_APPLY) || !SH_STEAM_INPUT_LOCAL_APPLY
+    (void)s; (void)command;
+    return SH_INPUT_ACK_UNAVAILABLE;
+#else
+    if (!s->service.local_apply || !s->load_result_supported) return SH_INPUT_ACK_UNAVAILABLE;
+    if (s->transaction.phase == SH_INPUT_TX_PREPARED || s->transaction.phase == SH_INPUT_TX_APPLYING ||
+        s->transaction.phase == SH_INPUT_TX_ROLLING_BACK || s->probe_original) return SH_INPUT_BUSY;
+    if (!s->pad_connected || !s->service.connected) return SH_INPUT_NO_CONTROLLER;
+    bool working_observed = s->transaction.working_known ?
+        s->transaction.working.revision == s->layout_revision :
+        s->load_result.completed && s->load_result.revision == s->layout_revision;
+    if (!s->current_layout || !s->layout_queued || s->activate_at_ms || !s->layout_revision_known || !working_observed ||
+        s->transaction.phase == SH_INPUT_TX_FAILED || s->transaction.phase == SH_INPUT_TX_CANCELLED) return SH_INPUT_UNAVAILABLE;
+    const wchar_t *inbox = L"C:\\madeira-steam-input-apply.bin";
+    const wchar_t *claim = L"C:\\madeira-steam-input-apply-processing.bin";
+    if (!MoveFileExW(inbox, claim, MOVEFILE_REPLACE_EXISTING)) return SH_INPUT_BAD_COMMAND;
+    HANDLE file = CreateFileW(claim, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+    uint8_t *data = NULL; DWORD size = 0, got = 0;
+    if (file != INVALID_HANDLE_VALUE) {
+        size = GetFileSize(file, NULL);
+        if (size >= SH_INPUT_APPLY_HEADER && size <= SH_INPUT_APPLY_LIMIT) {
+            data = HeapAlloc(GetProcessHeap(), 0, size);
+            if (data && (!ReadFile(file, data, size, &got, NULL) || got != size)) {
+                HeapFree(GetProcessHeap(), 0, data); data = NULL;
+            }
+        }
+        CloseHandle(file);
+    }
+    DeleteFileW(claim);
+    struct sh_input_apply payload;
+    uint32_t result = SH_INPUT_BAD_COMMAND;
+    char *apply = NULL, *rollback = NULL, *expected = NULL;
+    if (!data || !sh_input_apply_parse(data, size, &payload) || !sh_input_apply_scope(&payload, command) ||
+        payload.apply_revision <= s->layout_revision ||
+        !SH_INPUT_VERIFY_HASH(payload.apply, payload.apply_size, payload.apply_hash) ||
+        !SH_INPUT_VERIFY_HASH(payload.rollback, payload.rollback_size, payload.rollback_hash)) goto done;
+    size_t length = strlen(s->current_layout), written = 0;
+    expected = HeapAlloc(GetProcessHeap(), 0, length + 48);
+    if (!expected || !sh_input_vdf_materialize(s->current_layout, length, payload.rollback_revision,
+            expected, length + 48, &written) || written != payload.rollback_size ||
+        memcmp(expected, payload.rollback, written)) goto done;
+    apply = copy_layout_span(payload.apply, payload.apply_size);
+    rollback = copy_layout_span(payload.rollback, payload.rollback_size);
+    if (!apply || !rollback) goto done;
+    struct sh_input_transaction next = s->transaction;
+    if (!next.appid && !sh_input_tx_init(&next, s->service.appid, s->service.epoch, s->layout_revision)) goto done;
+    if (!sh_input_tx_reserve(&next, s->service.epoch, command->sequence, payload.apply_revision - 1) ||
+        next.apply_revision != payload.apply_revision || next.rollback_revision != payload.rollback_revision ||
+        !sh_input_tx_bind(&next, payload.apply_hash, payload.rollback_hash) ||
+        !sh_input_tx_queue(&next, s->o->now_ms())) goto done;
+    if (s->transaction_apply) HeapFree(GetProcessHeap(), 0, s->transaction_apply);
+    if (s->transaction_rollback) HeapFree(GetProcessHeap(), 0, s->transaction_rollback);
+    s->transaction_apply = apply; apply = NULL;
+    s->transaction_rollback = rollback; rollback = NULL;
+    s->transaction = next; s->transaction_dirty = true;
+    queue_layout_bytes(s, s->transaction_apply);
+    result = SH_INPUT_OK; /* accepted, not acknowledged */
+done:
+    if (expected) HeapFree(GetProcessHeap(), 0, expected);
+    if (apply) HeapFree(GetProcessHeap(), 0, apply);
+    if (rollback) HeapFree(GetProcessHeap(), 0, rollback);
+    if (data) HeapFree(GetProcessHeap(), 0, data);
+    return result;
+#endif
+}
+static void publish_baseline(struct sh_steam_input *s)
+{
+    if (!s->service.working_snapshot || !s->baseline_dirty || !s->current_layout || !s->pad_connected ||
+        !s->layout_queued || s->activate_at_ms || !s->layout_revision_known) return;
+    bool settled = s->transaction.sequence ? s->transaction.working_known &&
+        s->transaction.working.revision == s->layout_revision :
+        s->load_result.completed && s->load_result.revision == s->layout_revision &&
+        s->service.state == SH_INPUT_ACTIVATION_REQUESTED;
+    if (!settled) return;
+    size_t length = strlen(s->current_layout), cap = SH_INPUT_BASELINE_HEADER + length;
+    uint8_t *data = HeapAlloc(GetProcessHeap(), 0, cap);
+    if (!data) return;
+    size_t size = sh_input_baseline_feed(&s->service, s->layout_revision, s->current_layout, length, data, cap);
+    HANDLE file = size ? CreateFileW(L"C:\\madeira-steam-input-baseline.tmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL) : INVALID_HANDLE_VALUE;
+    bool ok = false;
+    if (file != INVALID_HANDLE_VALUE) {
+        DWORD wrote = 0; ok = WriteFile(file, data, (DWORD)size, &wrote, NULL) && wrote == size;
+        CloseHandle(file);
+        if (ok) ok = MoveFileExW(L"C:\\madeira-steam-input-baseline.tmp", L"C:\\madeira-steam-input-baseline.bin",
+                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    }
+    HeapFree(GetProcessHeap(), 0, data);
+    if (ok) s->baseline_dirty = false;
+    else DeleteFileW(L"C:\\madeira-steam-input-baseline.tmp");
+}
+static void poll_local_apply(struct sh_steam_input *s, uint64_t now)
+{
+    if (now >= s->next_baseline_ms) { s->next_baseline_ms = now + 500; publish_baseline(s); }
+    if (!s->transaction.appid) return;
+    enum sh_input_tx_phase before = s->transaction.phase;
+    if (sh_input_tx_poll(&s->transaction, now)) {
+        queue_layout_bytes(s, s->transaction_rollback);
+    }
+    if (s->transaction.phase != before) {
+        s->transaction_dirty = true;
+        if (s->transaction.phase == SH_INPUT_TX_FAILED) {
+            s->activate_at_ms = 0;
+            s->service.state = SH_INPUT_FAILED; s->service_dirty = true;
+        }
+    }
+    if (!s->transaction_dirty || now < s->next_transaction_ms) return;
+    s->next_transaction_ms = now + 500;
+    uint8_t bytes[SH_INPUT_TX_FEED_SIZE];
+    size_t size = sh_input_tx_feed(&s->service, &s->transaction, bytes, sizeof bytes);
+    if (!size) return;
+    HANDLE file = CreateFileW(L"C:\\madeira-steam-input-tx.tmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    DWORD wrote = 0;
+    bool ok = WriteFile(file, bytes, (DWORD)size, &wrote, NULL) && wrote == size;
+    CloseHandle(file);
+    if (ok) ok = MoveFileExW(L"C:\\madeira-steam-input-tx.tmp", L"C:\\madeira-steam-input-tx.bin",
+                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (ok) s->transaction_dirty = false;
+    else DeleteFileW(L"C:\\madeira-steam-input-tx.tmp");
+}
+
+#if defined(SH_STEAM_INPUT_REVISION_PROBE) && SH_STEAM_INPUT_REVISION_PROBE
+static char *revision_queue_copy(const char *source, uint32_t revision)
+{
+    size_t size = strlen(source), written = 0;
+    char *copy = HeapAlloc(GetProcessHeap(), 0, size + 48);
+    if (copy && !sh_input_vdf_materialize(source, size, revision, copy, size + 48, &written)) {
+        HeapFree(GetProcessHeap(), 0, copy); return NULL;
+    }
+    return copy;
+}
+#endif
+
+/* A diagnostic build only, never a normal apply/restore implementation.
+ * One fixed synthetic fixture, once per launch; no paths in the command,
+ * no persisted Steam selection changes and exact baseline bytes retained. */
+static bool start_revision_probe(struct sh_steam_input *s)
+{
+#if !defined(SH_STEAM_INPUT_REVISION_PROBE) || !SH_STEAM_INPUT_REVISION_PROBE
+    (void)s;
+    return false;
+#else
+    if (!s->load_result_supported || !s->service.enabled || !s->pad_connected ||
+        !s->layout_queued || s->activate_at_ms || s->probe_used || s->probe_original || s->transaction.sequence ||
+        s->selected_workshop || !s->layout_revision_known || s->layout_revision > INT32_MAX - 2) return false;
+    char *original = read_layout(s, s->selected_url.text);
+    uint32_t revision = 0;
+    if (!original) return false;
+    if (!sh_input_vdf_revision(original, strlen(original), &revision) || revision != s->layout_revision) {
+        HeapFree(GetProcessHeap(), 0, original); return false;
+    }
+    char *fixture = read_layout(s, "madeira_m1_revision_probe.vdf");
+    uint32_t fixture_revision = 0;
+    if (!fixture || !sh_input_vdf_revision(fixture, strlen(fixture), &fixture_revision) || fixture_revision != 731) {
+        if (fixture) HeapFree(GetProcessHeap(), 0, fixture);
+        HeapFree(GetProcessHeap(), 0, original); return false;
+    }
+    /* Reserve different revisions for apply AND restore. In particular, a
+     * delayed startup completion must never acknowledge a later rollback.
+     * One-shot gating prevents these numbers being reused in this launch. */
+    uint32_t first = revision > fixture_revision ? revision : fixture_revision;
+    if (first > INT32_MAX - 2) {
+        HeapFree(GetProcessHeap(), 0, fixture); HeapFree(GetProcessHeap(), 0, original); return false;
+    }
+    char *apply = revision_queue_copy(fixture, first + 1);
+    char *restore = revision_queue_copy(original, first + 2);
+    HeapFree(GetProcessHeap(), 0, fixture);
+    if (!apply || !restore) {
+        if (apply) HeapFree(GetProcessHeap(), 0, apply);
+        if (restore) HeapFree(GetProcessHeap(), 0, restore);
+        HeapFree(GetProcessHeap(), 0, original); return false;
+    }
+    s->probe_original = original; s->probe_restore = restore;
+    s->probe_revision = first + 1; s->probe_original_revision = first + 2;
+    s->probe_used = true; s->probe_phase = 1;
+    s->probe_deadline_ms = s->o->now_ms() + 15000;
+    s->o->event("steam-input-probe-phase", 1); /* applying; not acknowledged */
+    queue_layout_bytes(s, apply);
+    HeapFree(GetProcessHeap(), 0, apply);
+    return true;
+#endif
+}
+
+static void poll_revision_probe(struct sh_steam_input *s, uint64_t now)
+{
+    if (!s->probe_original || !s->probe_deadline_ms || now < s->probe_deadline_ms) return;
+    if (s->probe_phase == 1 || s->probe_phase == 2) {
+        s->probe_phase = 3;
+        s->probe_deadline_ms = now + 15000;
+        s->o->event("steam-input-probe-phase", 3); /* restoring */
+        queue_layout_bytes(s, s->probe_restore);
+    } else if (s->probe_phase == 3) {
+        s->probe_phase = 5; s->probe_deadline_ms = 0;
+        s->o->event("steam-input-probe-phase", 5); /* restore observation timed out */
+        /* Keep the exact baseline until session cleanup. No active claim. */
+    }
+}
+
 static void load_layout(struct sh_steam_input *s)
 {
     char app[16];
@@ -342,27 +702,28 @@ static void load_layout(struct sh_steam_input *s)
     char *vdf = s->selected_workshop ? NULL : read_layout(s, url);
     if (!vdf) {
         s->o->event("steam-input-layout-unavailable", 1);
+        s->service.state = SH_INPUT_FAILED; s->service_dirty = true;
         ++s->layout_attempts;
         return;
     }
     if (!selected || !s->selected_url.text || !*s->selected_url.text) {
         struct sh_utl_string app_key = {app, {0, 0}}, url = {gamepad_template, {0, 0}};
         ((select_fn)CONTROLLER(s, 114))(s->controller, 0, &app_key, 0, &url, false, true);
+        s->service.selected_fallback = true; s->service_dirty = true;
         s->o->event("steam-input-selected", 1);
     }
-    struct sh_config_info info = {1, 0, -1, 0x140, -1, 0, 1};
-    ((load_vdf_fn)CONTROLLER(s, 38))(s->controller, 0, (uint32_t)s->gameid, vdf, NULL, 0, &info);
+    queue_layout_bytes(s, vdf);
     HeapFree(GetProcessHeap(), 0, vdf);
-    s->cache_waits = 0;
-    s->layout_queued = true;
-    s->activate_at_ms = s->o->now_ms() + 3000;
-    s->o->event("steam-input-layout-queued", 1); /* void API; not proof of adoption */
 }
 
 void sh_steam_input_poll(struct sh_steam_input *s)
 {
-    if (!s->controller || !s->next_poll_ms) return;
+    if (!s->next_poll_ms) return;
     uint64_t now = s->o->now_ms();
+    poll_service(s, now);
+    if (!s->controller) return;
+    poll_revision_probe(s, now);
+    poll_local_apply(s, now);
     if (now >= s->next_output_ms) {
         s->next_output_ms = now + 100;
         observe_output(s);
@@ -378,6 +739,15 @@ void sh_steam_input_poll(struct sh_steam_input *s)
     if (s->sdl_started && now >= s->next_controller_ms) {
         s->next_controller_ms = now + 5000;
         bool connected = ((is_connected_fn)CONTROLLER(s, 85))(s->controller, 0, false);
+        if (s->service.connected != connected) {
+            sh_input_service_connection(&s->service, connected);
+            if (s->transaction.appid) {
+                sh_input_tx_disconnect(&s->transaction, s->service.epoch);
+                s->transaction_dirty = true;
+            }
+            DeleteFileW(L"C:\\madeira-steam-input-baseline.bin"); s->baseline_dirty = true;
+            s->service_dirty = true;
+        }
         if (!connected) {
             s->pad_connected = false;
             s->layout_queued = false;
@@ -386,23 +756,33 @@ void sh_steam_input_poll(struct sh_steam_input *s)
         } else {
             if (!s->pad_connected) s->o->event("steam-input-connected", 1);
             s->pad_connected = true;
-            if (!s->layout_queued && s->layout_attempts < 3) load_layout(s);
+            if (!s->probe_original && !s->transaction.sequence && !s->layout_queued && s->layout_attempts < 3) load_layout(s);
         }
     }
     if (s->activate_at_ms && now >= s->activate_at_ms) {
+        if ((s->transaction.phase == SH_INPUT_TX_APPLYING || s->transaction.phase == SH_INPUT_TX_ROLLING_BACK) &&
+            !s->transaction.completed) { s->activate_at_ms = now + 100; return; }
         s->activate_at_ms = 0;
         bool cached = ((has_mapping_fn)CONTROLLER(s, 128))(s->controller, (uint32_t)s->gameid);
         s->o->event("steam-input-mapping-cached", cached ? 1 : 0);
+        s->service.mapping_cached = cached; s->service_dirty = true;
+        if (cached) s->service.state = SH_INPUT_CACHED;
         if (!cached) {
             if (++s->cache_waits < 5) s->activate_at_ms = now + 1000;
-            else { s->layout_queued = false; ++s->layout_attempts; }
+            else { s->layout_queued = false; ++s->layout_attempts;
+                s->service.state = SH_INPUT_FAILED; s->service_dirty = true; }
         } else {
             /* Recompute the enable decision after the async cache load, not
              * just before it. Never activate the previous empty mapping. */
             ((reset_cache_fn)CONTROLLER(s, 131))(s->controller);
             ((warm_fn)CONTROLLER(s, 41))(s->controller, 0, (uint32_t)s->gameid);
             ((activate_fn)CONTROLLER(s, 40))(s->controller, 0, (uint32_t)s->gameid, false);
+            s->service.state = SH_INPUT_ACTIVATION_REQUESTED; s->service_dirty = true;
             s->o->event("steam-input-activation-requested", 1);
+            if (s->transaction.appid && sh_input_tx_activated(&s->transaction, s->layout_revision, now)) {
+                s->transaction_dirty = true;
+                if (s->transaction.working_known) s->service.state = SH_INPUT_ACTIVE;
+            }
         }
     }
     if (s->last_count < 0 && now >= s->next_poll_ms) {
@@ -412,8 +792,71 @@ void sh_steam_input_poll(struct sh_steam_input *s)
     }
 }
 
+void sh_steam_input_callback(struct sh_steam_input *s, int32_t id, const void *data, int32_t size)
+{
+    if (s->controller && s->next_poll_ms && s->load_result_supported && id == 1060003 && size >= 0) {
+        struct sh_input_load_result result;
+        if (!sh_input_load_result_parse(data, (size_t)size, &result) ||
+            result.controller != 0 || result.appid != s->gameid) return;
+        s->load_result = result;
+        if (s->transaction.appid && sh_input_tx_completion(&s->transaction, &result, s->o->now_ms()))
+            s->transaction_dirty = true;
+        if (result.completed && s->probe_original) {
+            if (s->probe_phase == 1 && result.revision == s->probe_revision) {
+                s->probe_phase = 2;
+                s->probe_deadline_ms = s->o->now_ms() + 30000;
+                s->o->event("steam-input-probe-phase", 2); /* observed; mapping still needs device proof */
+            } else if (s->probe_phase == 3 && result.revision == s->probe_original_revision) {
+                s->probe_phase = 4; s->probe_deadline_ms = 0;
+                HeapFree(GetProcessHeap(), 0, s->probe_original); s->probe_original = NULL;
+                HeapFree(GetProcessHeap(), 0, s->probe_restore); s->probe_restore = NULL;
+                s->o->event("steam-input-probe-phase", 4); /* original revision observed */
+            }
+        }
+        if (s->load_result_events < 16) {
+            s->o->event("steam-input-load-result-events", (int32_t)++s->load_result_events);
+            s->o->event("steam-input-load-result-completed", result.completed ? 1 : 0);
+            s->o->event("steam-input-load-result-revision", (int32_t)result.revision);
+            s->o->event("steam-input-load-result-matches-revision", result.completed &&
+                        s->layout_revision_known && result.revision == s->layout_revision ? 1 : 0);
+        }
+        /* Observation only until a distinctive revision/mapping proves its
+         * ordering relative to engine activation. Never advances service state. */
+        return;
+    }
+    struct sh_input_configuration configuration;
+    if (!s->controller || !s->next_poll_ms || id != 2803 || size < 0 ||
+        !sh_input_configuration_parse(data, (size_t)size, &configuration) ||
+        configuration.appid != s->gameid) return;
+    s->configuration = configuration;
+    /* Bound report growth. Device/creator identities never enter the report.
+     * In particular, these manifest revisions do not mark a VDF revision active. */
+    if (s->configuration_events < 16) {
+        s->o->event("steam-input-config-loaded-events", (int32_t)++s->configuration_events);
+        s->o->event("steam-input-config-loaded-major", (int32_t)configuration.major);
+        s->o->event("steam-input-config-loaded-minor", (int32_t)configuration.minor);
+        s->o->event("steam-input-config-loaded-flags", (configuration.native_actions ? 1 : 0) |
+                    (configuration.gamepad_output ? 2 : 0));
+    }
+}
+
 void sh_steam_input_end(struct sh_steam_input *s)
 {
+    s->next_poll_ms = 0; s->activate_at_ms = 0;
+    memset(&s->transaction, 0, sizeof s->transaction);
+    s->transaction_dirty = false; s->next_transaction_ms = 0;
+    if (s->current_layout) { HeapFree(GetProcessHeap(), 0, s->current_layout); s->current_layout = NULL; }
+    if (s->transaction_apply) { HeapFree(GetProcessHeap(), 0, s->transaction_apply); s->transaction_apply = NULL; }
+    if (s->transaction_rollback) { HeapFree(GetProcessHeap(), 0, s->transaction_rollback); s->transaction_rollback = NULL; }
+    DeleteFileW(L"C:\\madeira-steam-input-baseline.bin"); DeleteFileW(L"C:\\madeira-steam-input-baseline.tmp");
+    DeleteFileW(L"C:\\madeira-steam-input-tx.bin"); DeleteFileW(L"C:\\madeira-steam-input-tx.tmp");
+    DeleteFileW(L"C:\\madeira-steam-input-apply.bin"); DeleteFileW(L"C:\\madeira-steam-input-apply-processing.bin");
+    if (s->probe_original) { HeapFree(GetProcessHeap(), 0, s->probe_original); s->probe_original = NULL; }
+    if (s->probe_restore) { HeapFree(GetProcessHeap(), 0, s->probe_restore); s->probe_restore = NULL; }
+    if (s->service.enabled) {
+        DeleteFileW(input_feed); DeleteFileW(input_temp); DeleteFileW(input_command); DeleteFileW(input_claim);
+        s->service.enabled = false;
+    }
     if (s->output_view) UnmapViewOfFile(s->output_view);
     if (s->output_map) CloseHandle(s->output_map);
     s->output_view = NULL; s->output_map = NULL;
@@ -438,5 +881,7 @@ void sh_steam_input_prepare(struct sh_steam_input *s, HMODULE module, void *engi
 }
 void sh_steam_input_start(struct sh_steam_input *s) { (void)s; }
 void sh_steam_input_poll(struct sh_steam_input *s) { (void)s; }
+void sh_steam_input_callback(struct sh_steam_input *s, int32_t id, const void *data, int32_t size)
+{ (void)s; (void)id; (void)data; (void)size; }
 void sh_steam_input_end(struct sh_steam_input *s) { (void)s; }
 #endif

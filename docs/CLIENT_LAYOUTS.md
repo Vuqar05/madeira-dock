@@ -277,3 +277,94 @@ The output CUtlString storage is reused for the session.
 
 LoadConfigFromVDFString and SetFocusedWindow have void returns. Their wrappers
 read only a response fencepost; interpreting a returned AL as success is invalid.
+
+### Active-revision investigation candidates (not runtime pins)
+
+A read-only RTTI/wrapper scan of the same pinned January binary identifies
+serialized slot 45 `GetControllerConfiguration` at RVA `0x749c10` (IPC ID
+`0xe724b7ee`) and slot 65 `GetBindingRevision` at `0x741200` (IPC ID
+`0x0b7f0f1d`). Slot 61 names `GetBindingVDFString` at `0x741730`; slot 105
+names `GetControllerIdentity` at `0x74a110`. These are investigation leads,
+not supported APIs, and none is added to the runtime layout or invoked.
+
+The slot-45 wrapper serializes one four-byte input from EDX, reads a
+four-byte return value and deserializes an additional output through the
+R8 argument. Slot 65 serializes one four-byte input, reads a boolean return
+and copies two four-byte outputs through the R8/R9 arguments. These observations
+do not establish the server-side meaning, object ownership or lifetime. In
+particular, a binding's revision might describe an editable/cache object rather
+than the layout currently executing on a controller. Next inspect the matching
+server handlers and SteamUI callers, establish whether slot 45 exposes an active
+binding or a copy, verify output storage/lifetime and asynchronous activation
+ordering, then pin/test an acknowledgement using a distinctive mapping. The
+version-1 query service intentionally does not use these candidates as proof.
+
+
+### Configuration-loaded notification (2026-11-02)
+
+Valve documents `SteamInputConfigurationLoaded_t` as a configuration-load
+notification, with App ID, device handle, creator, action-manifest major/minor
+revisions and native-action/gamepad flags:
+https://partner.steamgames.com/doc/api/ISteamInput#SteamInputConfigurationLoaded_t
+The pinned January client posts callback 2803 with 40 bytes at `0x5ccd37`
+and `0x5ccd71`. The x64 payload layout is app at 0, device at 8, creator at 16,
+major/minor at 24/28 and bool flags at 32/33 (tail padding to 40).
+The observer accepts only this exact size and valid booleans, filters the
+launched App ID and bounds numeric reporting to 16 observations. Creator is
+neither decoded nor retained; device handles never enter logs. There are no
+new private method calls. Notification delivery to Dock still requires device
+verification. These revisions identify the action manifest, not the exact VDF
+content; this notification alone cannot acknowledge a selected content hash.
+
+Further server tracing rules out using slot 45 with controller index 0 as an
+active-revision getter: its serialized server thunk `0x953540` delegates to
+CSteamController slot 115 (`0x5d31f0`), which looks up the supplied binding
+handle in the binding-object tree and serializes that object. Slot 65 delegates
+through `0x9532c0` to CSteamController slot 135 (`0x5d1890`), looking up the
+same tree and reading that object's revision fields. Neither establishes which
+object is executing for the controller. Slot 103 GetControllerStatusEvent is
+a fixed 12-byte controller-status snapshot; it is not an event queue or an
+active-layout acknowledgement. None of these candidate methods is enabled.
+
+
+### Next load-completion lead (2026-11-02; not enabled)
+
+January's `CInternalCallback<CRemoteClientManager, LoadControllerConfigResult_t>`
+RTTI resolves to vtable RVA `0x12db500`. Its constructor at `0x8d6033` stores
+member handler `0x8e9990` and registers callback ID 1060003 (`0x102ca3`) at
+`0x8d6065`. The controller load completion at `0x5cce40` posts that callback
+with 32 bytes starting at its job object +0x50 (sender call at `0x5cce62`).
+The R2 Dock report observes callback ID 1060003 on its pipe, independently of
+the public 2803 notification. No payload is decoded, saved or logged.
+
+This is a lead for correlating asynchronous load completion to the requested
+binding, not an active-revision acknowledgement. Next trace the complete payload
+construction and handler, establish binding/controller/app identity and ownership,
+and distinguish cache-load completion from engine activation before adding a
+bounded decoder. Never infer a content-hash acknowledgement from its name.
+
+
+### Native document revision in the private completion (2026-11-02)
+
+Further construction tracing establishes these fields in January callback
+1060003 (32 bytes): completed bool at 0, controller index at 4, App ID at 8,
+creator at 16 (deliberately not decoded), document revision at 24. Remaining
+metadata/padding is skipped. `CLoadControllerConfigWorkItem` constructor
+`0x5b7810` stores the index at +0x54 and app at +0x58, then copies mapping
++0x170 (creator) to +0x60 and mapping +0x19c to +0x68. The completion sender
+posts the 32 bytes at +0x50. The parsed field at mapping +0x19c comes directly
+from the root `revision` VDF key (`0x62dedd`..`0x62df09`). The writer increments
+it at `0x633cfe` before writing `revision`; serializing a binding is therefore
+not necessarily a passive read. This is separate from the public callback's
+action-manifest major/minor values at mapping +0x224/+0x228.
+
+The real-binary checker now asserts the work-item vtable target, sender size,
+constructor field origins, VDF key and revision store/increment instructions.
+The runtime decoder is gated by the existing exact January adapter and filters
+the launched app/controller 0, validates exact size and bool/index bounds, skips
+creator and caps reporting. A separate metadata reader compares the queued
+VDF's document revision without changing it. No callback changes the production
+service to active. A compile-time opt-in, one-shot synthetic revision-731 probe
+now exercises live queueing and original-byte restoration. Its distinct A/B
+mapping, callback ordering and original-file preservation require device proof
+before promoting this correlation into an exact-revision acknowledgement.
