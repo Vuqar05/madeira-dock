@@ -367,13 +367,20 @@ off even with a status.
   of at most 63 bytes of valid UTF-8 without ASCII control characters. Lobby IDs,
   server addresses and connect strings are not exported.
 - **Commands:** the app writes `C:\madeira-friends-cmd.bin` (magic
-  `MFCMD001`, exactly 21 bytes: operation, SteamID, sequence 1 to 2^31-1, as
-  the report prints it signed). Dock takes it by renaming it to
+  `MFCMD001`, exactly 21 bytes: operation, SteamID, sequence). Dock accepts
+  any non-zero sequence, but the report prints it as a signed 32-bit number,
+  so only 1 to 2^31-1 come back correctly: senders must stay in that range.
+  Dock takes it by renaming it to
   `C:\madeira-friends-cmd.taken` (so a command written meanwhile waits for the
   next poll instead of being deleted unread), reads and deletes that, checks
   that the SteamID is an individual account on the
   friends list, and reports `friends-cmd-seq` and `friends-cmd-result`
   (1 done, 2 not joinable, 3 not a friend, 4 the client refused, 5 malformed).
+  A malformed command gets `friends-cmd-result=5` with no `friends-cmd-seq`
+  line, so a sender cannot match it to its command and sees a timeout. A
+  command with the same sequence as the previous one is ignored and gets no
+  result line, so the same command never runs twice; use a new sequence for
+  every command.
   With friends off, Dock does not read commands. Operation 3 changes the account's status: the id field
   carries 1 Online, 3 Away or 7 Invisible (nothing else is accepted) and Dock
   sends it through the client's shared connection.
